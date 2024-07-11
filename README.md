@@ -72,4 +72,4 @@ Distributed under the BSD-3-Clause License. See `LICENSE.txt` for more informati
 
 info[ a t]rapidmapping.admin.ch
 
-[https://www.rapidmapping.admin.ch](https://www.rapidmapping.admin.ch))
+[https://www.rapidmapping.admin.ch](https://www.rapidmapping.admin.ch)

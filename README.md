@@ -31,7 +31,7 @@ Detailed usage instructions for each tool and script can be found in their respe
 
 We provide several utility scripts to assist with various tasks in the [utilities](utilities/):
 
-###  rm-publish_einzelbilder.py
+###  rm_publish_einzelbilder.py
 #### Description
 
 This script processes images for the RM-PublishEinzelbilder project. It includes functions for resizing images, extracting EXIF data, and generating KML and TXT files. The intention was to run this script as an intermediate solution on a laptop with QGIS and therefore OSGeo4W Shell, without requiring additional Python packages, so it can be run on a PC with a standard QGIS installation.

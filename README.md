@@ -2,7 +2,7 @@
 
 ## Overview
 
-Welcome to the official code repository for the swisstopo / FOEN  [www.rapidmapping.admin.ch](www.rapidmapping.admin.ch) initiative. This repository contains software and code developed by swisstopo, a Swiss government agency, dedicated to the timely acquisition and provision of geospatial data in the event of natural disasters. Our Rapidmapping service is a crucial tool in delivering aerial or satellite imagery to support disaster response and management.
+Welcome to the official code repository for the swisstopo / FOEN  [www.rapidmapping.admin.ch](https://www.rapidmapping.admin.ch) initiative. This repository contains software and code developed by swisstopo, a Swiss government agency, dedicated to the timely acquisition and provision of geospatial data in the event of natural disasters. Our Rapidmapping service is a crucial tool in delivering aerial or satellite imagery to support disaster response and management.
 
 ## Table of Contents
 

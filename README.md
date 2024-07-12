@@ -53,7 +53,7 @@ python rm-publish_einzelbilder.py
 ### rm_process_pug_images.py
 
 #### Description
-This script processes PUG images by extracting EXIF data, applying mask, and creating a KML file with image previews and location data.
+This script processes PUG images [example](https://data.geo.admin.ch/ch.swisstopo.rapidmapping/data/2024-008-TICINO/i240630_121859-0.jpg) by extracting EXIF data, applying mask, and creating a KML file with image previews and location data.
 
 ##### Features
 - Extracts text from predefined bounding boxes using EasyOCR.

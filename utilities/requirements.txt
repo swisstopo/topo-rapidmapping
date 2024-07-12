@@ -1,0 +1,7 @@
+easyocr
+exif
+opencv-python
+pykml
+lxml
+numpy==1.25.2
+colorama

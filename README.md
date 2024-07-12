@@ -50,6 +50,31 @@ To use this script, run the following command in your OSGeo4W Shell with a stand
 ```sh
 python rm-publish_einzelbilder.py
 ```
+### rm_process_pug_images.py
+
+#### Description
+This script processes PUG images by extracting EXIF data, applying mask, and creating a KML file with image previews and location data.
+
+##### Features
+- Extracts text from predefined bounding boxes using EasyOCR.
+- Applies mask to images and saves the masked images.
+- Extracts and modifies EXIF data (date, time, GPS coordinates).
+- Generates a KML file with image previews and coordinates.
+- Logs errors for images that cannot be georeferenced.
+
+##### Usage
+This scripts needs some additional Python modules. Tested with Python 3.10.12 and 3.11.9.
+   ```sh
+   pip install -r requirements.txt
+   python rm_process_pug_images.py
+   ```
+1. Run the script.
+2. Enter the input directory path containing PNG images.
+3. Enter the output directory path where processed images and KML file will be saved.
+4. If `pgu_mask.png` is not found in the current directory, provide the path to it.
+5. The script will process each image, apply masks, extract EXIF data, and create a KML file with image previews and coordinates.
+6. An error file (`not_processed.txt`) will be generated for files that could not be georeferenced.
+
 
 ## Contributing
 

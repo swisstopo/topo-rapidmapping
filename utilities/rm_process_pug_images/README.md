@@ -1,6 +1,6 @@
 ## Generate Executable binaries / EXE
 
-The WINDOWS version was created with pyinstaller. Pyinstaller and gdal - that is [quite a thing](https://stackoverflow.com/questions/56472933/pyinstaller-executable-fails).
+The WINDOWS version was created with pyinstaller. [quite a thing](https://stackoverflow.com/questions/56472933/pyinstaller-executable-fails).
 Solution steps
 
 1. Install pip packages
@@ -18,4 +18,5 @@ Solution steps
   - folder `models` including content
   - `rm_process_pug_images.exe`
 
-Now you shoudl be able to run it  whereever you are allowed to run  software ....
+examples are available e.g. as [v0.0.1-alpha](https://github.com/swisstopo/topo-rapidmapping/releases/tag/v0.0.1-alpha)
+Now you should be able to run it  whereever you are allowed to run  software ....

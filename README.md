@@ -63,6 +63,7 @@ This script processes PUG images [example](https://data.geo.admin.ch/ch.swisstop
 - Logs errors for images that cannot be georeferenced.
 
 ##### Usage
+###### Python
 This scripts needs some additional Python modules. Tested with Python 3.10.12 and 3.11.9.
    ```sh
    pip install -r requirements.txt
@@ -74,6 +75,14 @@ This scripts needs some additional Python modules. Tested with Python 3.10.12 an
 4. If `pgu_mask.png` is not found in the current directory, provide the path to it.
 5. The script will process each image, apply masks, extract EXIF data, and create a KML file with image previews and coordinates.
 6. An error file (`not_processed.txt`) will be generated for files that could not be georeferenced.
+
+###### Executable binaries / EXE
+Download from [utilities](utilities/rm_process_pug_images/):
+- `pgu_mask.png`
+- folder `models` including content
+- `rm_process_pug_images.exe`
+
+1. Run `rm_process_pug_images.exe`
 
 
 ## Contributing

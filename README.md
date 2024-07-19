@@ -77,7 +77,7 @@ This scripts needs some additional Python modules. Tested with Python 3.10.12 an
 6. An error file (`not_processed.txt`) will be generated for files that could not be georeferenced.
 
 ###### Executable binaries / EXE
-Download from [utilities](utilities/rm_process_pug_images/):
+Download from [v0.0.1-alpha](https://github.com/swisstopo/topo-rapidmapping/releases/tag/v0.0.1-alpha)
 - `pgu_mask.png`
 - folder `models` including content
 - `rm_process_pug_images.exe`

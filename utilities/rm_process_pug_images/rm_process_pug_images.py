@@ -470,7 +470,7 @@ def process_image(image_path, reader):
 def main():
     # Initialize colorama for cross-platform compatibility for color
     init()
-    reader = easyocr.Reader(['en'], gpu=False)
+    reader = easyocr.Reader(['en'], gpu=False, model_storage_directory='model\\')
     global output_dir  # Declare the global variable
     global mask_path  # Declare the global variable
     global error_file_path  # Declare the global variable

@@ -50,6 +50,25 @@ To use this script, run the following command in your OSGeo4W Shell with a stand
 ```sh
 python rm-publish_einzelbilder.py
 ```
+###  rm_remove_leeren_TIFS.py
+#### Description
+
+This script removes the empty TIFs (TIFs with only "no data") from a folder and the tfw which are related.The intention was to run this script as an intermediate solution on a laptop with QGIS and therefore OSGeo4W Shell, without requiring additional Python packages, so it can be run on a PC with a standard QGIS installation.
+
+#####  Features
+
+- **Size check**: Check siz from image
+- **Search data name**: Search for a tfw with the same name as a TIF.
+- **Delete files**: Delet TIFs and TWs.
+- **TXT File Generation**: Write log file with deletes Filenames.
+
+##### Usage
+
+To use this script, run the following command in your OSGeo4W Shell with a standard QGIS installation:
+
+```sh
+python rm_remove_leeren_TIFS.py
+```
 ### rm_process_pug_images.py
 
 #### Description

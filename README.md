@@ -50,6 +50,29 @@ To use this script, run the following command in your OSGeo4W Shell with a stand
 ```sh
 python rm-publish_einzelbilder.py
 ```
+### rm_publish_quickorthophoto.sh
+#### Description
+
+A Bash script to automate the publication of quick orthophoto products. Exports of ADS100 flightlines (GeoTIFF files) and generates a seamless mosaic, then converts it into a Cloud Optimized GeoTIFF(COG) containing the RGB bands. Based on https://github.com/geostandards-ch/cog-best-practices 
+
+#### Features
+
+- **Interactive prompts**  for input/output directories, filename, and GSD (Ground Sample Distance)
+- **Uses GDAL tools**  (gdalbuildvrt, gdalwarp, gdal_translate) for efficient processing
+- **Handles large datasets**  with multi-threading and optimized settings
+
+
+#### Usage
+
+Run the script in your shell (Linux or OSGeo4W Shell):
+
+```sh
+bash rm_publish_quickorthophoto.sh /path/to/input_folder /path/to/output_folder
+```
+
+- Replace `/path/to/input_folder` with your orthophoto source directory.
+- Replace `/path/to/output_folder` with your desired destination.
+
 ###  rm_remove_leeren_TIFS.py
 #### Description
 

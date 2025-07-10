@@ -68,7 +68,7 @@ del input_files_temp.txt
 REM Create VRT file
 echo [1/3] Building VRT mosaic...
 set "vrt_file=%output_directory%\%output_filename%.vrt"
-gdalbuildvrt --config NUM_THREADS ALL_CPUS --config GDAL_DISABLE_READDIR_ON_OPEN EMPTY_DIR -srcnodata "0 0 0" -vrtnodata "0 0 0" -input_file_list input_files.txt "%vrt_file%"
+gdalbuildvrt --config NUM_THREADS ALL_CPUS -srcnodata "0 0 0" -vrtnodata "0 0 0" -input_file_list input_files.txt "%vrt_file%"
 
 REM Create mosaic with gdalwarp
 echo [2/3] Creating mosaic (warp)...

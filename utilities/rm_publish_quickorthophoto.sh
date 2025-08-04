@@ -56,12 +56,10 @@ fi
 # GDAL options
 gdalbuildvrt_options=(
   --config NUM_THREADS ALL_CPUS
-  --config GDAL_DISABLE_READDIR_ON_OPEN EMPTY_DIR
 )
 
 gdal_translate_options=(
   --config NUM_THREADS ALL_CPUS
-  --config GDAL_DISABLE_READDIR_ON_OPEN EMPTY_DIR
 )
 
 # Find all .tif files in input directory and save to input_files.txt

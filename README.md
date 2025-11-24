@@ -131,6 +131,99 @@ Download from [v0.0.1-alpha](https://github.com/swisstopo/topo-rapidmapping/rele
 
 1. Run `rm_process_pug_images.exe`
 
+### util_publish_stac_fsdi.py
+
+**Purpose:** Simplified STAC publisher for publishing geodata to FSDI (Federal Spatial Data Infrastructure) without a configuration file. All settings are passed as parameters.
+
+**Description:**
+This [script](https://github.com/swisstopo/topo-rapidmapping/blob/main/utilities/util_publish_stac_fsdi.py) publishes geospatial assets (GeoTIFFs, GeoJSON, CSV, Parquet, JPEG) to the FSDI STAC catalog. It automatically creates STAC Items and Assets, generates metadata from the files, and uploads the data via multipart upload.
+
+**Features:**
+
+- Automatic creation of STAC Items from GeoTIFF metadata (bounding box, timestamp)
+- Supports various file types: GeoTIFF, GeoJSON, CSV, Parquet, JPEG
+- Coordinate transformation from LV95 to WGS84
+- Automatic thumbnail linking and map visualization
+- Integrated multipart upload for large files
+- CLI interface with environment variable support
+- Support for "current" use cases (current data)
+
+**Usage:**
+
+```sh
+# Basic usage
+python util_publish_stac_fsdi.py -u myuser -p mypass -a file.tif -i 2024-01-15T120000 \
+  -c ch.swisstopo.product -g geocat-id -H data.geo.admin.ch
+
+# With custom asset title
+python util_publish_stac_fsdi.py -u myuser -p mypass -a file.tif -i 2024-01-15T120000 \
+  -c ch.swisstopo.product -g geocat-id -H data.int.bgdi.ch -t "My Custom Title"
+
+# With environment variables for credentials
+export STAC_USERNAME=myuser
+export STAC_PASSWORD=mypass
+python util_publish_stac_fsdi.py -a file.tif -i 2024-01-15T120000 \
+  -c ch.swisstopo.product -g geocat-id -H data.geo.admin.ch
+```
+
+
+***
+
+### main_multipart_upload_via_api.py
+
+**Purpose:** Multipart upload of large asset files to the STAC API with MD5 checksums and retry logic.
+
+**Description:**
+This [script](https://github.com/swisstopo/topo-rapidmapping/blob/main/utilities/main_multipart_upload_via_api.py) enables uploading large files to the STAC API via multipart upload. It splits large files into smaller parts, generates MD5 checksums for each part, and uploads them in parallel. The script is an adaptation of the original [bgdi-script](https://github.com/geoadmin/bgdi-scripts/blob/master/system-utilities/sys-data/py-scripts/multipart_upload_via_api.py) from geoadmin.
+
+**Features:**
+
+- Multipart upload for large files (default: 250 MB per part)
+- Automatic MD5 checksum generation (Base64-encoded)
+- SHA-256 multihash calculation for file integrity
+- Retry logic with exponential backoff
+- Support for different environments (localhost, dev, int, prod)
+- Graceful abort on errors or keyboard interrupt
+- Force option to abort running uploads
+- Verbose logging for debugging
+
+
+**Usage:**
+
+```sh
+# Basic usage (CLI)
+python main_multipart_upload_via_api.py int ch.swisstopo.collection item_name \
+  asset_name /path/to/file.tif --username myuser --password mypass
+
+# With custom part size (500 MB)
+python main_multipart_upload_via_api.py prod ch.swisstopo.collection item_name \
+  asset_name /path/to/large_file.tif --part-size 500 --username myuser --password mypass
+
+# With verbose output and force
+python main_multipart_upload_via_api.py int ch.swisstopo.collection item_name \
+  asset_name /path/to/file.tif --username myuser --password mypass -v --force
+
+# Programmatic usage (within Python)
+from main_multipart_upload_via_api import multipart_upload
+
+success = multipart_upload(
+    env='int',
+    collection='ch.swisstopo.myproduct',
+    item='2024-01-15T120000',
+    asset='data.tif',
+    filepath='/path/to/data.tif',
+    username='myuser',
+    password='mypass',
+    force=True,
+    verbose=False
+)
+```
+
+**Dependencies:**
+
+- requests
+- multihash
+- urllib3
 
 ## Contributing
 

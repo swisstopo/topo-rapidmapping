@@ -13,6 +13,7 @@ Key features:
 - Configurable part size
 - Ability to force upload and abort existing uploads
 - Verbose logging option
+- Proxy support for corporate environments
 
 Usage:
     python script_name.py <env> <collection> <item> <asset> <filepath> [options]
@@ -34,9 +35,10 @@ Dependencies:
 
 Author: Unknown (based on geoadmin/bgdi-scripts, orginal  https://github.com/geoadmin/bgdi-scripts/blob/master/system-utilities/sys-data/py-scripts/multipart_upload_via_api.py)
 
-chnages to the orginal:
+changes to the original:
  - added def multipart_upload
  - added in def _create_multipart_upload(self) : "update_interval": 30
+ - added proxy support via proxy_config parameter
 
 """
 
@@ -59,6 +61,9 @@ from urllib3.util.retry import Retry  # pylint: disable=import-error
 DEFAULT_TIMEOUT = 60  # seconds
 MAX_PARTS_NUMBER = 100
 DEFAULT_PART_SIZE = 250  # MB
+
+# Global session object - will be configured with or without proxy
+http = None
 
 
 class TimeoutHTTPAdapter(HTTPAdapter):
@@ -91,12 +96,40 @@ class HttpError(requests.exceptions.HTTPError):
         super().__init__(msg, response=response)
 
 
-retries = Retry(total=3, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504])
-adapter = TimeoutHTTPAdapter(max_retries=retries)
+def initialize_http_session(proxy_config=None):
+    """
+    Initialize the global HTTP session with retry logic and optional proxy support.
+    
+    Args:
+        proxy_config (dict): Optional proxy configuration with 'proxies' and 'verify_ssl' keys
+    """
+    global http
+    
+    retries = Retry(total=3, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504])
+    adapter = TimeoutHTTPAdapter(max_retries=retries)
 
-http = requests.Session()
-http.mount("http://", adapter)
-http.mount("https://", adapter)
+    http = requests.Session()
+    
+    # Configure proxy if provided
+    if proxy_config and proxy_config.get('enabled') and proxy_config.get('proxies'):
+        http.proxies.update(proxy_config['proxies'])
+        
+        # Configure SSL verification
+        if proxy_config.get('verify_ssl') is False:
+            http.verify = False
+            # Disable SSL warnings
+            import urllib3
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            print(f"⚠ HTTP session initialized with proxy (SSL verification disabled): {proxy_config['proxies'].get('https', proxy_config['proxies'].get('http'))}")
+        else:
+            http.verify = True
+            print(f"✓ HTTP session initialized with proxy: {proxy_config['proxies'].get('https', proxy_config['proxies'].get('http'))}")
+    else:
+        http.verify = True
+        print("✓ HTTP session initialized without proxy (direct connection)")
+    
+    http.mount("http://", adapter)
+    http.mount("https://", adapter)
 
 
 def b64_md5(data):
@@ -157,8 +190,14 @@ def get_args():
 
 class StacMultipartUploader:
 
-    def __init__(self):
+    def __init__(self, proxy_config=None):
         '''Read the command line arguments and set the corresponding instance variables'''
+        
+        # Initialize HTTP session with proxy config if not already done
+        global http
+        if http is None:
+            initialize_http_session(proxy_config)
+        
         args = get_args()
 
         if not os.path.isfile(args.filepath):
@@ -372,17 +411,44 @@ class StacMultipartUploader:
 def main():
     '''Upload large file to STAC using multi-part uploads'''
     try:
+        # Initialize without proxy config for CLI usage
+        initialize_http_session()
         StacMultipartUploader().upload_file()
     except KeyboardInterrupt as interrupt:
         print('\nInterrupted!')
         raise SystemExit(interrupt) from interrupt
 
 
-def multipart_upload(env, collection, item, asset, filepath, username, password, force=True,verbose=False):
+def multipart_upload(env, collection, item, asset, filepath, username, password, 
+                     force=True, verbose=False, proxy_config=None):
+    """
+    Upload large file to STAC using multi-part uploads.
+    
+    Args:
+        env (str): Environment (localhost, dev, int, prod)
+        collection (str): Collection name
+        item (str): Item name
+        asset (str): Asset name
+        filepath (str): Path to file to upload
+        username (str): STAC API username
+        password (str): STAC API password
+        force (bool): Force upload (cancel existing uploads)
+        verbose (bool): Enable verbose logging
+        proxy_config (dict): Proxy configuration with 'enabled', 'proxies', and 'session' keys
+    
+    Returns:
+        bool: True if successful, False otherwise
+    """
     import os
+    
+    # Initialize HTTP session with proxy configuration FIRST
+    initialize_http_session(proxy_config)
+    
+    # Set environment variables for credentials
     os.environ['STAC_USER'] = username
     os.environ['STAC_PASSWORD'] = password
 
+    # Build command-line arguments for the uploader
     sys.argv = [
         'main_multipart_upload_via_api.py',
         env,
@@ -400,8 +466,13 @@ def multipart_upload(env, collection, item, asset, filepath, username, password,
         sys.argv.append('--force')
 
     try:
-        StacMultipartUploader().upload_file()
+        # Pass proxy_config to the uploader
+        StacMultipartUploader(proxy_config=proxy_config).upload_file()
         return True
     except Exception as e:
         print(f"Upload failed: {str(e)}")
         return False
+
+
+if __name__ == "__main__":
+    main()

@@ -1,249 +1,411 @@
-# topo-rapidmapping
+# Rapid Mapping Processor
 
-## Overview
+Automatisiertes System für die Publikation von Rapid Mapping Daten auf der FSDI STAC Plattform.
 
-Welcome to the official code repository for the swisstopo / FOEN  [www.rapidmapping.admin.ch](https://www.rapidmapping.admin.ch) initiative. This repository contains software and code developed by swisstopo, a Swiss government agency, dedicated to the timely acquisition and provision of geospatial data in the event of natural disasters. Our Rapidmapping service is a crucial tool in delivering aerial or satellite imagery to support disaster response and management. :-
+## 🎯 Übersicht
 
-## Table of Contents
+Dieses Tool vereint die Funktionalität von:
+- `rm_publish_quickorthophoto.bat` (Orthophoto-Mosaike)
+- `rm_publish_einzelbilder.py` (Einzelbilder)
+- `util_publish_stac_fsdi.py` (STAC-Publikation)
 
-- [Introduction](#introduction)
-- [Features](#features)
-- [Usage](#usage)
-- [Utilities](#utilities)
-- [Contributing](#contributing)
-- [License](#license)
-- [Contact](#contact)
+in einem einzigen, benutzerfreundlichen Workflow.
 
-## Introduction
+## 📁 Projektstruktur
 
-Rapidmapping is a federal service aimed at swiftly gathering and distributing geospatial data, such as aerial or satellite images, during natural events. This repository encompasses various scripts, utilities, and resources that facilitate the creation and dissemination of these rapid mapping products.
-
-## Features
-
-- **Data Processing Pipelines**: Scripts to handle image preprocessing, analysis, and conversion.
-- **Data Publication Pipelines**: Tools to ensure quick publication of mapping products.
-
-## Usage
-
-Detailed usage instructions for each tool and script can be found in their respective directories. 
-
-## Utilities
-
-We provide several utility scripts to assist with various tasks in the [utilities](utilities/):
-
-###  rm_publish_einzelbilder.py
-#### Description
-
-This script processes images for the RM-PublishEinzelbilder project. It includes functions for resizing images, extracting EXIF data, and generating KML and TXT files. The intention was to run this script as an intermediate solution on a laptop with QGIS and therefore OSGeo4W Shell, without requiring additional Python packages, so it can be run on a PC with a standard QGIS installation.
-
-#####  Features
-
-- **Image Resizing**: Efficiently generates thumbnails images .
-- **EXIF Data Extraction**: Check and extract metadata from images for further processing.
-- **KML File Generation**: Create KML files for easy visualization of geospatial data.
-- **TXT File Generation**: Produce TXT files for downloadlinks.
-
-##### Usage
-
-To use this script, run the following command in your OSGeo4W Shell with a standard QGIS installation:
-
-```sh
-python rm-publish_einzelbilder.py
-```
-### rm_publish_quickorthophoto.sh/bat
-#### Description
-
-A Bash/DOS script to automate the publication of quick orthophoto products. Exports of ADS100 flightlines (GeoTIFF files) and generates a seamless mosaic, then converts it into a Cloud Optimized GeoTIFF(COG) containing the RGB bands. Based on https://github.com/geostandards-ch/cog-best-practices 
-
-#### Features
-
-- **Interactive prompts**  for input/output directories, filename, and GSD (Ground Sample Distance)
-- **Uses GDAL tools**  (gdalbuildvrt, gdalwarp, gdal_translate) for efficient processing
-- **Handles large datasets**  with multi-threading and optimized settings
-
-
-#### Usage
-
-Run the script in your shell (Linux or OSGeo4W Shell) or Windows/DOS Prompt:
-
-Linux
-```sh
-bash rm_publish_quickorthophoto.sh /path/to/input_folder /path/to/output_folder
-```
-Windows/DOS
-```sh
-rm_publish_quickorthophoto.bat /path/to/input_folder /path/to/output_folder
+```bash
+rapidmapping_processor/
+├── rapidmapping_processor.py      # Hauptskript (CLI)
+├── configuration.py                # Produktdefinitionen & Konfiguration
+├── requirements.txt                # Python-Dependencies
+├── README.md                       # Diese Datei
+├── utilities/                      # Hilfsfunktionen
+│   ├── __init__.py
+│   ├── credentials.py             # Credentials-Management
+│   ├── proxy_handler.py           # Proxy-Erkennung
+│   ├── file_handler.py            # Datei-Operationen
+│   ├── mosaic_processor.py        # Orthophoto-Verarbeitung
+│   ├── photo_processor.py         # Einzelbild-Verarbeitung
+│   └── stac_publisher.py          # STAC-Publikation
+├── secrets/                        # Credentials (NICHT in Git!)
+│   └── stac_credentials.json      # STAC API-Keys
+├── temp/                           # Temporäre Dateien (wird gelöscht)
+└── util_publish_stac_fsdi.py      # Bestehender STAC-Publisher
+    main_multipart_upload_via_api.py # Multipart-Upload
 ```
 
-- Replace `/path/to/input_folder` with your orthophoto source directory.
-- Replace `/path/to/output_folder` with your desired destination.
+## 🚀 Installation
 
-###  rm_remove_leeren_TIFS.py
-#### Description
+### 1. GDAL-Tools installieren ( kommt mit QGIS)
 
-This script removes the empty TIFs (TIFs with only "no data") from a folder and the tfw which are related.The intention was to run this script as an intermediate solution on a laptop with QGIS and therefore OSGeo4W Shell, without requiring additional Python packages, so it can be run on a PC with a standard QGIS installation.
+#### Windows (OSGeo4W Shell)
+1. Download: https://trac.osgeo.org/osgeo4w/
+2. Installiere GDAL-Pakete
+3. Führe Script in OSGeo4W Shell aus
 
-#####  Features
+### 2. venv Python-Dependencies
 
-- **Size check**: Check siz from image
-- **Search data name**: Search for a tfw with the same name as a TIF.
-- **Delete files**: Delet TIFs and TWs.
-- **TXT File Generation**: Write log file with deletes Filenames.
+```bash
+"C:\Program Files\QGIS 3.40.7\apps\Python312\python.exe" -m venv .venv --system-site-packages
+.venv\Scripts\activate    
 
-##### Usage
-
-To use this script, run the following command in your OSGeo4W Shell with a standard QGIS installation:
-
-```sh
-python rm_remove_leeren_TIFS.py
-```
-### rm_process_pug_images.py
-
-#### Description
-This script processes PUG images [example](https://data.geo.admin.ch/ch.swisstopo.rapidmapping/data/2024-008-TICINO/i240630_121859-0.jpg) by extracting EXIF data, applying mask, and creating a KML file with image previews and location data.
-
-##### Features
-- Extracts text from predefined bounding boxes using EasyOCR.
-- Applies mask to images and saves the masked images.
-- Extracts and modifies EXIF data (date, time, GPS coordinates).
-- Generates a KML file with image previews and coordinates.
-- Logs errors for images that cannot be georeferenced.
-
-##### Usage
-###### Python
-This scripts needs some additional Python modules. Tested with Python 3.10.12 and 3.11.9.
-   ```sh
-   pip install -r requirements.txt
-   python rm_process_pug_images.py
-   ```
-1. Run the script.
-2. Enter the input directory path containing PNG images.
-3. Enter the output directory path where processed images and KML file will be saved.
-4. If `pgu_mask.png` is not found in the current directory, provide the path to it.
-5. The script will process each image, apply masks, extract EXIF data, and create a KML file with image previews and coordinates.
-6. An error file (`not_processed.txt`) will be generated for files that could not be georeferenced.
-
-###### Executable binaries / EXE
-Download from [v0.0.1-alpha](https://github.com/swisstopo/topo-rapidmapping/releases/tag/v0.0.1-alpha)
-- `pgu_mask.png`
-- folder `models` including content
-- `rm_process_pug_images.exe`
-
-1. Run `rm_process_pug_images.exe`
-
-### util_publish_stac_fsdi.py
-
-**Purpose:** Simplified STAC publisher for publishing geodata to FSDI (Federal Spatial Data Infrastructure) without a configuration file. All settings are passed as parameters.
-
-**Description:**
-This [script](https://github.com/swisstopo/topo-rapidmapping/blob/main/utilities/util_publish_stac_fsdi.py) publishes geospatial assets (GeoTIFFs, GeoJSON, CSV, Parquet, JPEG) to the FSDI STAC catalog. It automatically creates STAC Items and Assets, generates metadata from the files, and uploads the data via multipart upload.
-
-**Features:**
-
-- Automatic creation of STAC Items from GeoTIFF metadata (bounding box, timestamp)
-- Supports various file types: GeoTIFF, GeoJSON, CSV, Parquet, JPEG
-- Coordinate transformation from LV95 to WGS84
-- Automatic thumbnail linking and map visualization
-- Integrated multipart upload for large files
-- CLI interface with environment variable support
-- Support for "current" use cases (current data)
-
-**Usage:**
-
-```sh
-# Basic usage
-python util_publish_stac_fsdi.py -u myuser -p mypass -a file.tif -i 2024-01-15T120000 \
-  -c ch.swisstopo.product -g geocat-id -H data.geo.admin.ch
-
-# With custom asset title
-python util_publish_stac_fsdi.py -u myuser -p mypass -a file.tif -i 2024-01-15T120000 \
-  -c ch.swisstopo.product -g geocat-id -H data.int.bgdi.ch -t "My Custom Title"
-
-# With environment variables for credentials
-export STAC_USERNAME=myuser
-export STAC_PASSWORD=mypass
-python util_publish_stac_fsdi.py -a file.tif -i 2024-01-15T120000 \
-  -c ch.swisstopo.product -g geocat-id -H data.geo.admin.ch
+pip install -r requirements.txt
 ```
 
 
-***
 
-### main_multipart_upload_via_api.py
-
-**Purpose:** Multipart upload of large asset files to the STAC API with MD5 checksums and retry logic.
-
-**Description:**
-This [script](https://github.com/swisstopo/topo-rapidmapping/blob/main/utilities/main_multipart_upload_via_api.py) enables uploading large files to the STAC API via multipart upload. It splits large files into smaller parts, generates MD5 checksums for each part, and uploads them in parallel. The script is an adaptation of the original [bgdi-script](https://github.com/geoadmin/bgdi-scripts/blob/master/system-utilities/sys-data/py-scripts/multipart_upload_via_api.py) from geoadmin.
-
-**Features:**
-
-- Multipart upload for large files (default: 250 MB per part)
-- Automatic MD5 checksum generation (Base64-encoded)
-- SHA-256 multihash calculation for file integrity
-- Retry logic with exponential backoff
-- Support for different environments (localhost, dev, int, prod)
-- Graceful abort on errors or keyboard interrupt
-- Force option to abort running uploads
-- Verbose logging for debugging
-
-
-**Usage:**
-
-```sh
-# Basic usage (CLI)
-python main_multipart_upload_via_api.py int ch.swisstopo.collection item_name \
-  asset_name /path/to/file.tif --username myuser --password mypass
-
-# With custom part size (500 MB)
-python main_multipart_upload_via_api.py prod ch.swisstopo.collection item_name \
-  asset_name /path/to/large_file.tif --part-size 500 --username myuser --password mypass
-
-# With verbose output and force
-python main_multipart_upload_via_api.py int ch.swisstopo.collection item_name \
-  asset_name /path/to/file.tif --username myuser --password mypass -v --force
-
-# Programmatic usage (within Python)
-from main_multipart_upload_via_api import multipart_upload
-
-success = multipart_upload(
-    env='int',
-    collection='ch.swisstopo.myproduct',
-    item='2024-01-15T120000',
-    asset='data.tif',
-    filepath='/path/to/data.tif',
-    username='myuser',
-    password='mypass',
-    force=True,
-    verbose=False
-)
+#### Linux
+```bash
+sudo apt update
+sudo apt install gdal-bin python3-gdal
 ```
 
-**Dependencies:**
+### 3. Credentials konfigurieren
 
-- requests
-- multihash
-- urllib3
+Erstelle `secrets/stac_credentials.json`:
 
-## Contributing
+```json
+{
+  "INT": {
+    "username": "int_username",
+    "password": "int_password",
+    "hostname": "sys-data.int.bgdi.ch"
+  },
+  "PROD": {
+    "username": "prod_username",
+    "password": "prod_password",
+    "hostname": "data.geo.admin.ch"
+  }
+}
+```
+Erstelle `secrets/proxy_config.json`:
 
-Contributions are what make the open source community such an amazing place to learn, inspire, and create. Any contributions you make are **greatly appreciated**.
+```json
+{
+  "proxies": [
+    {
+      "name": "Swiss Federal Admin Proxy",
+      "url": "http://proxy-bvcol.admin.ch:8080",
+      "enabled": true
+    },
+    {
+      "name": "Alternative Proxy",
+      "url": "http://your-proxy:8080",
+      "enabled": false
+    }
+  ],
+  "test_url": "https://data.geo.admin.ch/browser/index.html",
+  "timeout": 5
+}
+```
 
-If you have a suggestion that would make this better, please fork the repo and create a pull request. You can also simply open an issue with the tag "enhancement".
-Don't forget to give the project a star! Thanks again!
 
-1. Fork the Project
-2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the Branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
+**Alternative:** Environment Variables setzen:
+```bash
+export STAC_USERNAME=your_username
+export STAC_PASSWORD=your_password
+```
 
-## License
+## 💻 Verwendung
 
-Distributed under the BSD-3-Clause License. See `LICENSE.txt` for more information.
+INT-Environment (Standard)
 
-## Contact
+```bash
+python rapidmapping_processor.py
+```
+PROD-Environment
 
-info[ a t]rapidmapping.admin.ch
+```bash
+python rapidmapping_processor.py --prod
+```
+Ohne Upload (nur lokale Verarbeitung)
+```bash
+python rapidmapping_processor.py --upload=False
+```
 
-[https://www.rapidmapping.admin.ch](https://www.rapidmapping.admin.ch)
+### Grundlegender Workflow
+
+1. QDOP RGB/NRG Mosaike
+Input: Verzeichnis mit TIF-Dateien
+Workflow:
+
+```bash
+1. Single-File-Check
+   ├─ Wenn 1 Datei + COG + 8-bit RGB → Direkt-Upload ⚡
+   └─ Sonst: Mosaic-Workflow
+2. Mosaic-Workflow (bei Multiple Files)
+   ├─ VRT-Mosaic erstellen (GDAL BuildVRT)
+   ├─ Warping mit GSD (GDAL Warp)
+   └─ COG-Konvertierung (GDAL Translate)
+3. STAC-Upload
+   └─ Item: ram-YYYY-MM-DDthhmmss-qdop-rgb-mosaic
+```
+Output:
+
+```bash
+ram-2024-07-15t143000-qdop-rgb-mosaic.tif
+```
+
+2. Einzelbilder (EBN/EBO)
+Input: Verzeichnis mit JPEG-Dateien
+```bash
+1. Photo-Verarbeitung
+   ├─ EXIF extrahieren (GPS + Timestamp)
+   └─ Thumbnail erstellen
+   
+2. Einzelner Upload pro Photo
+   ├─ Temporär umbenennen:
+   │  ├─ Photo: ram-YYYY-MM-DDthhmmss-ebn.jpg
+   │  └─ Thumbnail: thumbnail.jpg
+   ├─ STAC-Upload
+   └─ Rückbenennen zu Original
+   
+3. KML-Overview generieren
+   ├─ Sammle alle Photos des Tages
+   ├─ Erstelle KML mit Placemarks
+   └─ Upload als: ram-YYYY-MM-DDt235959-ebn-overview.kml
+```
+Output pro Photo:
+```bash
+Item: ram-2024-07-15t120000-ebn
+Assets:
+
+    ram-2024-07-15t120000-ebn.jpg (Original)
+    thumbnail.jpg (Thumbnail)
+```
+
+Output Overview:
+```bash
+Item: ram-2024-07-15t235959-ebn-overview
+Asset: ram-2024-07-15t235959-ebn-overview.km
+```
+### Interaktive Eingaben
+
+Das Script führt durch folgende Schritte:
+
+1. **Proxy-Erkennung** (automatisch)
+2. **Input-Verzeichnis** angeben
+3. **Produkttyp** auswählen:
+   - QDOP RGB Mosaic
+   - QDOP NRG Mosaic
+   - Einzelbilder Nadir (EBN)
+   - Einzelbilder Oblique (EBO)
+4. **Zeitstempel** (bei Mosaiken) oder EXIF-Extraktion (bei Einzelbildern)
+5. **GSD** (bei Mosaiken)
+6. Bestätigung und Start
+
+## 📦 Produkttypen
+
+### 1. QDOP RGB/NRG Mosaike
+
+**Input:** Verzeichnis mit TIF-Dateien (ADS100 Flightlines)
+
+**Output:**
+- COG-TIFF Mosaic: `ram-YYYY-MM-DDthhmmss-qdop-rgb-mosaic.tif`
+- STAC Item: `YYYY-MM-DDthhmmss`
+
+**Workflow:**
+1. VRT-Mosaic erstellen
+2. Warping mit gewünschtem GSD
+3. COG-Konvertierung
+4. STAC-Upload
+
+### 2. Einzelbilder (Nadir/Oblique)
+
+**Input:** Verzeichnis mit JPEG-Dateien
+
+**Output:**
+- Thumbnails: `thumbs/*.jpg` (640x480px)
+- KML-Datei: `ram-YYYY-MM-DDt235959-ebn.kml`
+- URL-Liste: `ram-YYYY-MM-DDt235959-ebn.txt`
+
+**Workflow:**
+1. EXIF-Extraktion (GPS + Zeitstempel)
+2. Thumbnail-Erstellung
+3. KML-Generierung mit Placemarks
+4. STAC-Upload (KML + Photos)
+
+## 🔧 Konfiguration
+
+### Produktkonfiguration (`configuration.py`)
+
+```python
+# STAC-Einstellungen
+STAC_COLLECTION = "ch.swisstopo.spezialbefliegungen"
+STAC_HOSTNAME = "sys-data.int.bgdi.ch"  # INT
+# STAC_HOSTNAME = "data.geo.admin.ch"   # PROD
+
+# COG-Einstellungen
+COG_CONFIG = {
+    'compress': 'JPEG',
+    'quality': 75,
+    'blocksize': 256
+}
+
+# Thumbnail-Einstellungen
+THUMBNAIL_CONFIG = {
+    'max_width': 640,
+    'max_height': 480
+}
+```
+
+### Proxy-Konfiguration
+
+Automatische Erkennung mit Fallback:
+1. Direkte Verbindung testen
+2. Bei Fehler: Swiss Federal Proxy verwenden (`proxy-bvcol.admin.ch:8080`)
+
+## 📋 Namenskonventionen
+
+### Dateinamen
+```
+ram-YYYY-MM-DDthhmmss-{product}-{type}.ext
+
+Beispiele:
+- ram-2024-07-15t143000-qdop-rgb-mosaic.tif
+- ram-2024-07-15t143000-ebn.kml
+```
+
+### STAC Items
+```
+YYYY-MM-DDthhmmss (lowercase)
+
+Beispiel: 2024-07-15t143000
+```
+
+## 🔐 Sicherheit
+
+- **Credentials**: NIE in Git committen! 
+- **secrets/**: Im `.gitignore` hinzufügen
+- **Environment Variables**: Sicherer als Config-Files
+
+```bash
+# .gitignore
+secrets/
+temp/
+*.pyc
+__pycache__/
+```
+
+## 🐛 Troubleshooting
+
+### GDAL nicht gefunden
+```
+✗ GDAL-Tools nicht verfügbar
+```
+**Lösung:** GDAL installieren und in PATH hinzufügen
+
+### Keine Internet-Verbindung
+```
+✗ Keine Internet-Verbindung möglich
+```
+**Lösung:** Proxy-Einstellungen prüfen oder manuell in `proxy_handler.py` setzen
+
+### Credentials fehlen
+```
+✗ Keine Credentials gefunden
+```
+**Lösung:** `secrets/stac_credentials.json` erstellen oder Environment Variables setzen
+
+### GPS-Daten fehlen
+```
+⚠ Keine GPS-Daten gefunden
+```
+**Lösung:** Überprüfen ob EXIF-Tags in JPEGs vorhanden sind
+
+## 📝 Logging
+
+Das Script gibt detailliertes Feedback:
+
+```
+INFO: ✓ Erfolgreiche Operation
+WARNING: ⚠ Warnung (nicht kritisch)
+ERROR: ✗ Fehler (kritisch)
+```
+
+### Log-Level anpassen
+
+In `rapidmapping_processor.py`:
+```python
+logging.basicConfig(level=logging.DEBUG)  # Mehr Details
+logging.basicConfig(level=logging.INFO)   # Standard
+logging.basicConfig(level=logging.WARNING) # Nur Warnungen
+```
+
+## 🔄 Workflow-Diagramm
+
+```
+Input Directory
+    │
+    ├─[Mosaike]─> get_tif_files() ─> create_cog_mosaic()
+    │                                       │
+    │                                       ├─ VRT
+    │                                       ├─ Warp
+    │                                       └─ COG
+    │                                           │
+    │                                           └─> publish_to_stac()
+    │
+    └─[Photos]──> get_jpg_files() ─> process_individual_photos()
+                                            │
+                                            ├─ Extract EXIF
+                                            ├─ Create Thumbnails
+                                            ├─ Generate KML
+                                            └─ Generate URL-List
+                                                │
+                                                └─> publish_to_stac()
+```
+
+## 🤝 Integration mit bestehenden Scripts
+
+Das System nutzt die bestehenden Module:
+- `util_publish_stac_fsdi.py`: STAC-Publikation
+- `main_multipart_upload_via_api.py`: Multipart-Upload
+
+Diese Module werden **NICHT modifiziert** und müssen im gleichen Verzeichnis liegen.
+
+## 📞 Support
+
+Bei Problemen:
+1. Log-Output prüfen
+2. `temp/` Verzeichnis inspizieren (wird bei Fehler nicht gelöscht)
+3. Issue im Repository erstellen
+
+## 📄 Lizenz
+
+Swisstopo Internal Use Only
+
+## ✨ Features
+
+- ✅ Automatische Proxy-Erkennung
+- ✅ Flexible Credentials (File/Env)
+- ✅ Interaktive CLI
+- ✅ Detailliertes Logging
+- ✅ Error Handling & Recovery
+- ✅ Temp-Cleanup bei Erfolg
+- ✅ Progress-Feedback
+- ✅ Batch-Upload Support
+
+
+## Projektstruktur
+
+rapidmapping_processor/
+├── rapidmapping_processor.py          # Hauptskript v2.0
+├── configuration.py                    # Produktdefinitionen
+├── requirements.txt                    # GDAL Python-Bindings!
+├── README_v2.md                        # Diese Datei
+├── utilities/
+│   ├── __init__.py
+│   ├── credentials.py                 # INT/PROD-Support
+│   ├── proxy_handler.py               # JSON-Config
+│   ├── file_handler.py
+│   ├── gdal_utils.py                  # ⭐ NEU: GDAL-Bindings
+│   ├── stac_query.py                  # ⭐ NEU: STAC-Abfragen
+│   ├── mosaic_processor.py            # Mit GDAL-Bindings
+│   ├── photo_processor.py             # Mit GDAL-Bindings
+│   └── stac_publisher.py              # Environment-Support
+├── secrets/
+│   ├── stac_credentials.json          # INT + PROD
+│   └── proxy_config.json              # Mehrere Proxies
+├── temp/                               # Temporäre Dateien
+└── util_publish_stac_fsdi.py          # Bestehend
+    main_multipart_upload_via_api.py

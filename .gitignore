@@ -164,5 +164,4 @@ cython_debug/
 
 #Secrets and other local dirs
 secrets/
-results/
-rclone/
+temp/

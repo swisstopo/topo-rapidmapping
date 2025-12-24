@@ -6,6 +6,8 @@ automatisch alle konfigurierten Proxies.
 
 WICHTIG: Diese Datei ist die EINZIGE Stelle für Proxy-Verwaltung!
 Alle anderen Module verwenden nur die Funktionen aus diesem Modul.
+
+VPN-SUPPORT: Erkennt automatisch VPN-Verbindungen und passt SSL-Handling an.
 """
 
 import json
@@ -28,15 +30,16 @@ PROXY_CONFIG = {
     'session': None,
     'verify_ssl': True,
     'active_proxy': None,
-    'initialized': False  # Markiert ob bereits initialisiert
+    'initialized': False,  # Markiert ob bereits initialisiert
+    'is_vpn': False  # NEW: Markiert ob VPN-Verbindung erkannt wurde
 }
 
 # Default Settings (Fallback wenn keine Config-Datei vorhanden)
 DEFAULT_PROXY_CONFIG = {
     'proxies': [
         {
-            'name': 'Corporate Proxy',
-            'url': 'http://proxy-bvcol.admin.ch:8080',
+            'name': 'Default',
+            'url': 'http://My.proxy.ch:8080',
             'enabled': True
         }
     ],
@@ -118,6 +121,43 @@ def test_connection(
         return False
 
 
+def detect_vpn_connection(proxies: Optional[Dict] = None, test_urls: List[str] = None) -> bool:
+    """
+    Versucht zu erkennen ob eine VPN-Verbindung aktiv ist.
+    
+    Heuristik: Wenn Verbindung mit Proxy funktioniert, aber SSL-Verifikation
+    deaktiviert werden muss, ist wahrscheinlich VPN mit SSL-Inspection aktiv.
+    
+    Args:
+        proxies (Optional[Dict]): Proxy-Dictionary
+        test_urls (List[str]): URLs zum Testen (default: data.geo.admin.ch + sys-data.int.bgdi.ch)
+        
+    Returns:
+        bool: True wenn VPN vermutet wird
+    """
+    if test_urls is None:
+        test_urls = [
+            'https://data.geo.admin.ch/browser/index.html',
+            'https://sys-data.int.bgdi.ch/api/stac/v0.9/'
+        ]
+    
+    if proxies:
+        # Teste mehrere URLs - wenn IRGENDEINE SSL-Probleme hat, ist es VPN
+        for test_url in test_urls:
+            # Test 1: Mit Proxy und SSL-Verifikation
+            works_with_ssl = test_connection(test_url, proxies=proxies, verify_ssl=True, timeout=3)
+            
+            # Test 2: Mit Proxy ohne SSL-Verifikation
+            works_without_ssl = test_connection(test_url, proxies=proxies, verify_ssl=False, timeout=3)
+            
+            # Wenn nur ohne SSL funktioniert -> VPN mit SSL-Inspection
+            if works_without_ssl and not works_with_ssl:
+                logger.info(f"  ℹ VPN-Verbindung mit SSL-Inspection erkannt (getestet mit {test_url})")
+                return True
+    
+    return False
+
+
 def detect_proxy_requirement() -> Dict:
     """
     Erkennt automatisch ob ein Proxy benötigt wird.
@@ -134,6 +174,7 @@ def detect_proxy_requirement() -> Dict:
               - verify_ssl (bool): SSL-Verifikation aktiv
               - active_proxy (str): Name des aktiven Proxies
               - initialized (bool): True (markiert als initialisiert)
+              - is_vpn (bool): True wenn VPN erkannt wurde
               
     Raises:
         ConnectionError: Wenn keine Verbindung möglich ist
@@ -161,7 +202,8 @@ def detect_proxy_requirement() -> Dict:
             'session': session,
             'verify_ssl': True,
             'active_proxy': None,
-            'initialized': True
+            'initialized': True,
+            'is_vpn': False
         }
     else:
         logger.info("  ✗ Direkte Verbindung fehlgeschlagen")
@@ -193,21 +235,43 @@ def detect_proxy_requirement() -> Dict:
             "https": proxy_url
         }
         
-        # Test mit SSL-Verifikation deaktiviert (typisch für Corporate Proxies)
-        if test_connection(test_url, proxies=proxies, verify_ssl=False, timeout=timeout):
-            logger.warning(f"  ⚠ Verbindung über Proxy '{proxy_name}' erfolgreich (SSL-Verifikation deaktiviert)")
+        # Test mit SSL-Verifikation (für normale Corporate Networks ohne VPN)
+        works_with_ssl = test_connection(test_url, proxies=proxies, verify_ssl=True, timeout=timeout)
+        
+        # Test ohne SSL-Verifikation (für VPN mit SSL-Inspection)
+        works_without_ssl = test_connection(test_url, proxies=proxies, verify_ssl=False, timeout=timeout)
+        
+        # Wenn IRGENDEINE Verbindung funktioniert, nutzen wir diesen Proxy
+        if works_with_ssl or works_without_ssl:
+            # Erkenne ob VPN aktiv ist (auch wenn erste URL SSL-ok war)
+            # Teste zusätzlich die STAC-Server-URL
+            is_vpn = detect_vpn_connection(proxies, test_urls=[
+                test_url,
+                'https://sys-data.int.bgdi.ch/api/stac/v0.9/'
+            ])
+            
+            # Wenn VPN erkannt ODER SSL-Verifikation fehlschlägt -> SSL deaktivieren
+            use_ssl = works_with_ssl and not is_vpn
+            
+            if use_ssl:
+                logger.info(f"  ✓ Verbindung über Proxy '{proxy_name}' erfolgreich (mit SSL-Verifikation)")
+            else:
+                logger.warning(f"  ⚠ Verbindung über Proxy '{proxy_name}' erfolgreich (SSL-Verifikation deaktiviert)")
+                if is_vpn:
+                    logger.warning("  ⚠ VPN-Verbindung erkannt - SSL-Handling wird angepasst")
             
             session = requests.Session()
             session.proxies.update(proxies)
-            session.verify = False  # CRITICAL: Set verify to False for corporate proxies
+            session.verify = use_ssl
             
             return {
                 'enabled': True,
                 'proxies': proxies,
                 'session': session,
-                'verify_ssl': False,  # CRITICAL: Flag to indicate SSL is disabled
+                'verify_ssl': use_ssl,
                 'active_proxy': proxy_name,
-                'initialized': True
+                'initialized': True,
+                'is_vpn': is_vpn
             }
         else:
             logger.info(f"  ✗ Proxy '{proxy_name}' fehlgeschlagen")
@@ -250,6 +314,8 @@ def initialize_proxy():
             logger.info(f"  Aktiver Proxy: {PROXY_CONFIG['active_proxy']}")
             logger.info(f"  Proxy-URL: {PROXY_CONFIG['proxies']['http']}")
             logger.info(f"  SSL-Verifikation: {'Deaktiviert' if not PROXY_CONFIG['verify_ssl'] else 'Aktiviert'}")
+            if PROXY_CONFIG.get('is_vpn'):
+                logger.info(f"  VPN-Verbindung: Erkannt")
         else:
             logger.info("Keine Proxy-Konfiguration erforderlich")
         logger.info("=" * 70)
@@ -267,6 +333,8 @@ def initialize_proxy():
         logger.info(f"  Aktiver Proxy: {PROXY_CONFIG['active_proxy']}")
         logger.info(f"  Proxy-URL: {PROXY_CONFIG['proxies']['http']}")
         logger.info(f"  SSL-Verifikation: {'Deaktiviert' if not PROXY_CONFIG['verify_ssl'] else 'Aktiviert'}")
+        if PROXY_CONFIG.get('is_vpn'):
+            logger.info(f"  VPN-Verbindung: Erkannt (SSL-Handling angepasst)")
     else:
         logger.info("Keine Proxy-Konfiguration erforderlich")
     logger.info("=" * 70)
@@ -310,6 +378,7 @@ def get_proxy_config() -> Dict:
               - verify_ssl (bool): SSL-Verifikation aktiv
               - active_proxy (str): Name des aktiven Proxies
               - initialized (bool): Initialisierungs-Status
+              - is_vpn (bool): VPN erkannt
     """
     global PROXY_CONFIG
     
@@ -338,6 +407,17 @@ def is_proxy_enabled() -> bool:
         initialize_proxy()
     
     return PROXY_CONFIG['enabled']
+
+
+def is_vpn_detected() -> bool:
+    """
+    Prüft ob eine VPN-Verbindung erkannt wurde.
+    
+    Returns:
+        bool: True wenn VPN erkannt
+    """
+    config = get_proxy_config()
+    return config.get('is_vpn', False)
 
 
 def get_proxies_dict() -> Optional[Dict]:

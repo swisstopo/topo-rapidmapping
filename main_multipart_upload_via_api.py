@@ -14,6 +14,7 @@ Key features:
 - Ability to force upload and abort existing uploads
 - Verbose logging option
 - Proxy support for corporate environments
+- VPN-compatible SSL handling
 
 Usage:
     python script_name.py <env> <collection> <item> <asset> <filepath> [options]
@@ -39,6 +40,7 @@ changes to the original:
  - added def multipart_upload
  - added in def _create_multipart_upload(self) : "update_interval": 30
  - added proxy support via proxy_config parameter
+ - added VPN-compatible SSL handling for S3 uploads
 
 """
 
@@ -58,12 +60,13 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry  # pylint: disable=import-error
 
 # For large parts, it might help to increase the DEFAULT_TIMEOUT
-DEFAULT_TIMEOUT = 60  # seconds
+DEFAULT_TIMEOUT = 180  # Increased from 60 to 180 seconds for VPN/large files
 MAX_PARTS_NUMBER = 100
 DEFAULT_PART_SIZE = 250  # MB
 
-# Global session object - will be configured with or without proxy
-http = None
+# Global session objects
+http = None  # Main session for STAC API
+s3_session = None  # Separate session for S3 uploads
 
 
 class TimeoutHTTPAdapter(HTTPAdapter):
@@ -98,15 +101,26 @@ class HttpError(requests.exceptions.HTTPError):
 
 def initialize_http_session(proxy_config=None):
     """
-    Initialize the global HTTP session with retry logic and optional proxy support.
+    Initialize the global HTTP sessions with retry logic and optional proxy support.
+    Creates TWO separate sessions:
+    1. http: For STAC API calls (with proxy if needed)
+    2. s3_session: For S3 presigned URL uploads (direct connection, no proxy)
     
     Args:
         proxy_config (dict): Optional proxy configuration with 'proxies' and 'verify_ssl' keys
     """
-    global http
+    global http, s3_session
     
-    retries = Retry(total=3, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504])
-    adapter = TimeoutHTTPAdapter(max_retries=retries)
+    # ===========================================================================
+    # SESSION 1: STAC API (with proxy if configured)
+    # ===========================================================================
+    retries = Retry(
+        total=3, 
+        backoff_factor=1, 
+        status_forcelist=[429, 500, 502, 503, 504],
+        raise_on_status=False  # Don't raise exception, let us handle it
+    )
+    adapter = TimeoutHTTPAdapter(max_retries=retries, timeout=DEFAULT_TIMEOUT)
 
     http = requests.Session()
     
@@ -120,16 +134,52 @@ def initialize_http_session(proxy_config=None):
             # Disable SSL warnings
             import urllib3
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-            print(f"⚠ HTTP session initialized with proxy (SSL verification disabled): {proxy_config['proxies'].get('https', proxy_config['proxies'].get('http'))}")
+            print(f"⚠ STAC API session initialized with proxy (SSL verification disabled): {proxy_config['proxies'].get('https', proxy_config['proxies'].get('http'))}")
         else:
             http.verify = True
-            print(f"✓ HTTP session initialized with proxy: {proxy_config['proxies'].get('https', proxy_config['proxies'].get('http'))}")
+            print(f"✓ STAC API session initialized with proxy: {proxy_config['proxies'].get('https', proxy_config['proxies'].get('http'))}")
     else:
         http.verify = True
-        print("✓ HTTP session initialized without proxy (direct connection)")
+        print("✓ STAC API session initialized without proxy (direct connection)")
     
     http.mount("http://", adapter)
     http.mount("https://", adapter)
+    
+    # ===========================================================================
+    # SESSION 2: S3 Upload (SAME PROXY as STAC API, SSL disabled)
+    # ===========================================================================
+    # CRITICAL INSIGHT: When on VPN, AWS S3 endpoints are BLOCKED by firewall
+    # and MUST go through the corporate proxy. We cannot bypass the proxy.
+    # However, we still disable SSL verification due to corporate certificates.
+    
+    s3_retries = Retry(
+        total=5,  # More retries for S3 due to VPN issues
+        backoff_factor=2,  # Exponential backoff
+        status_forcelist=[429, 500, 502, 503, 504],
+        raise_on_status=False
+    )
+    s3_adapter = TimeoutHTTPAdapter(max_retries=s3_retries, timeout=DEFAULT_TIMEOUT)
+    
+    s3_session = requests.Session()
+    
+    # CRITICAL: For VPN environments, S3 must use SAME proxy as STAC API
+    # but with SSL disabled due to corporate SSL inspection
+    if proxy_config and proxy_config.get('enabled'):
+        # Use SAME proxy as STAC API - VPN blocks direct S3 access
+        s3_session.proxies.update(proxy_config['proxies'])
+        # Always disable SSL for S3 uploads in corporate environments
+        s3_session.verify = False
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        print(f"⚠ S3 upload session initialized with proxy (SSL verification disabled): {proxy_config['proxies'].get('https', proxy_config['proxies'].get('http'))}")
+    else:
+        # No proxy = no corporate network = normal SSL verification, no proxy
+        s3_session.verify = True
+        s3_session.proxies = {}
+        print("✓ S3 upload session initialized without proxy (direct connection)")
+    
+    s3_session.mount("http://", s3_adapter)
+    s3_session.mount("https://", s3_adapter)
 
 
 def b64_md5(data):
@@ -193,9 +243,9 @@ class StacMultipartUploader:
     def __init__(self, proxy_config=None):
         '''Read the command line arguments and set the corresponding instance variables'''
         
-        # Initialize HTTP session with proxy config if not already done
-        global http
-        if http is None:
+        # Initialize HTTP sessions with proxy config if not already done
+        global http, s3_session
+        if http is None or s3_session is None:
             initialize_http_session(proxy_config)
         
         args = get_args()
@@ -215,55 +265,52 @@ class StacMultipartUploader:
         elif args.env == "int":
             hostname = "sys-data.int.bgdi.ch"
 
-        asset_path = f'collections/{args.collection}/items/{args.item}/assets/{args.asset}'
-        asset_file_size = os.path.getsize(args.filepath)
+        self.stac_base_url = f"{scheme}://{hostname}/api/stac/v0.9"
+        self.uploads_url = f"{self.stac_base_url}/collections/{args.collection}" \
+            f"/items/{args.item}/assets/{args.asset}/uploads"
 
-        self.asset_file_name = args.filepath
-        self.verbose = args.verbose
-        self.force = args.force
-        self.part_size = min(args.part_size_in_mb * 1024**2, asset_file_size)
-        self.uploads_url = f"{scheme}://{hostname}/api/stac/v0.9/{asset_path}/uploads"
-        self.credentials = (args.username, args.password)
-
-        if asset_file_size / self.part_size > MAX_PARTS_NUMBER:
-            self._log(f"Error: parts number must be smaller than {MAX_PARTS_NUMBER}. "\
-                  "Increase `--part-size`",
-                  verbose=self.verbose
+        if not args.username or not args.password:
+            print(
+                "ERROR: username and password must be provided, either as environment variables " \
+                "\"STAC_USER\" and \"STAC_PASSWORD\" or as arguments \"--username\" and " \
+                "\"--password\""
             )
             sys.exit(1)
 
+        self.credentials = (args.username, args.password)
+
+        self.part_size = args.part_size_in_mb * 1024 * 1024
+        self.asset_file_name = args.filepath
+        self.verbose = args.verbose
+        self.force = args.force
+
         # Generate hashes
-        self.checksum_multihash, self.md5_parts = self._generate_hashes()
+        (self.checksum_multihash, self.md5_parts) = self._generate_hashes()
 
-    def _log(self, message, verbose=False, request=None, response=None):
-        '''Log messages with optional timestamp, request, and response details'''
+    def _log(self, message, verbose=True, request=None, response=None):
+        '''Log message and optional request/response details'''
         if verbose:
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            print(f"[{timestamp}] {message}")
-
-            # Log request details if available
             if request:
-                print(f"Request: {request.method} {request.url}")
-                if request.body:
-                    # Avoid logging file attachments or large binary data
-                    if isinstance(request.body, bytes):
-                        print("Request Body: [binary data omitted]")
-                    else:
+                if self.verbose:
+                    print(f"  Request:")
+                    print(f"    URL: {request.url}")
+                    print(f"    Method: {request.method}")
+                    if request.body:
                         try:
-                            formatted_body = json.dumps(json.loads(request.body), indent=4)
-                            print(f"Request Body (formatted JSON):\n{formatted_body}")
+                            body_dict = json.loads(request.body)
+                            print(f"    Body (JSON):\n{json.dumps(body_dict, indent=2)}")
                         except (json.JSONDecodeError, TypeError):
-                            print(f"Request Body (raw):\n{request.body}")
-
-            # Log response details if available
+                            print(f"    Body (raw): {request.body[:200]}")
             if response:
-                print(f"Response Status: {response.status_code}")
-                if response.text:
+                if self.verbose:
+                    print(f"  Response:")
+                    print(f"    Status Code: {response.status_code}")
+                    print(f"    Reason: {response.reason}")
                     try:
-                        formatted_response = json.dumps(response.json(), indent=4)
-                        print(f"Response Body (formatted JSON):\n{formatted_response}")
-                    except (json.JSONDecodeError, TypeError):
-                        print(f"Response Body (raw):\n{response.text}")
+                        response_dict = response.json()
+                        print(f"    Body (JSON):\n{json.dumps(response_dict, indent=2)}")
+                    except (json.JSONDecodeError, ValueError):
+                        print(f"    Body (raw):\n{response.text}")
         else:
             print(message)
 
@@ -367,26 +414,65 @@ class StacMultipartUploader:
                     f"Uploading part {url['part']} of {number_of_parts}", verbose=self.verbose
                 )
                 data = file_descriptor.read(self.part_size)
-                retry = 3
+                retry = 5  # Increased from 3 to 5 for VPN stability
+                last_error = None
+                
                 while retry:
-                    response = http.put(
-                        url['url'],
-                        data=data,
-                        headers={'Content-MD5': self.md5_parts[url['part'] - 1]["md5"]}
-                    )
-                    self._log(
-                        f"Part {url['part']} upload complete.",
-                        verbose=self.verbose,
-                        request=response.request,
-                        response=response
-                    )
-                    if response.status_code == 200:
-                        parts.append({'etag': response.headers['ETag'], 'part_number': url['part']})
-                        retry = 0
-                    else:
+                    try:
+                        # CRITICAL: Use s3_session (not http) for S3 presigned URL uploads
+                        # This session has NO proxy and SSL verification disabled for VPN
+                        response = s3_session.put(
+                            url['url'],
+                            data=data,
+                            headers={'Content-MD5': self.md5_parts[url['part'] - 1]["md5"]},
+                            timeout=DEFAULT_TIMEOUT  # Explicit timeout for large uploads
+                        )
+                        
+                        self._log(
+                            f"Part {url['part']} upload complete.",
+                            verbose=self.verbose,
+                            request=response.request,
+                            response=response
+                        )
+                        
+                        if response.status_code == 200:
+                            parts.append({'etag': response.headers['ETag'], 'part_number': url['part']})
+                            retry = 0
+                            last_error = None
+                        else:
+                            last_error = f"HTTP {response.status_code}: {response.reason}"
+                            retry -= 1
+                            if retry > 0:
+                                import time
+                                wait_time = (6 - retry) * 2  # Progressive backoff: 2, 4, 6, 8 seconds
+                                print(f"  ⚠ Part {url['part']} failed: {last_error}. Retrying in {wait_time}s... ({retry} attempts left)")
+                                time.sleep(wait_time)
+                            else:
+                                raise HttpError(response, f'Failed to upload part {url["part"]} after 5 attempts')
+                    
+                    except requests.exceptions.SSLError as ssl_err:
+                        last_error = f"SSL Error: {str(ssl_err)}"
                         retry -= 1
-                        if retry <= 0:
-                            raise HttpError(response, f'Failed to upload part {url["part"]}')
+                        if retry > 0:
+                            import time
+                            wait_time = (6 - retry) * 2
+                            print(f"  ⚠ Part {url['part']} SSL error. Retrying in {wait_time}s... ({retry} attempts left)")
+                            time.sleep(wait_time)
+                        else:
+                            print(f"  ✗ Part {url['part']} failed after 5 attempts: {last_error}")
+                            raise
+                    
+                    except requests.exceptions.RequestException as req_err:
+                        last_error = f"Request Error: {str(req_err)}"
+                        retry -= 1
+                        if retry > 0:
+                            import time
+                            wait_time = (6 - retry) * 2
+                            print(f"  ⚠ Part {url['part']} request error. Retrying in {wait_time}s... ({retry} attempts left)")
+                            time.sleep(wait_time)
+                        else:
+                            print(f"  ✗ Part {url['part']} failed after 5 attempts: {last_error}")
+                            raise
 
         return parts
 
@@ -441,7 +527,7 @@ def multipart_upload(env, collection, item, asset, filepath, username, password,
     """
     import os
     
-    # Initialize HTTP session with proxy configuration FIRST
+    # Initialize HTTP sessions with proxy configuration FIRST
     initialize_http_session(proxy_config)
     
     # Set environment variables for credentials

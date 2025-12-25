@@ -131,7 +131,22 @@ def item_create_json_payload(id, coordinates, dt_iso8601, title, geocat_id, curr
     # Create the product name with prefix
     product = f'ch.swisstopo.{cleaned}'
 
-    thumbnail_url = f"{domain}ch.swisstopo.{product}/{id}/thumbnail.jpg"
+    thumbnail_url = f"{domain}{STAC_COLLECTION}/{id}/thumbnail.jpg"
+
+    # Build base links
+    links = [
+        {
+            "href": thumbnail_url,
+            "rel": "preview"
+        }
+    ]
+
+    # Only add visual link if cleaned contains "-qdop-"
+    if "-qdop-" in cleaned:
+        links.insert(0, {
+            "href": f"https://map.geo.admin.ch/#/map?layers=COG|{domain}{STAC_COLLECTION}/{id}/{asset}",
+            "rel": "visual"
+        })
 
     payload = {
         "id": id,
@@ -143,16 +158,7 @@ def item_create_json_payload(id, coordinates, dt_iso8601, title, geocat_id, curr
             "datetime": dt_iso8601,
             "title": title
         },
-        "links": [
-            {
-                "href": f"https://map.geo.admin.ch/#/map?layers=COG|{domain}{product}/{id}/{asset}",
-                "rel": "visual"
-            },
-            {
-                "href": thumbnail_url,
-                "rel": "preview"
-            }
-        ]
+        "links": links
     }
     return payload
 

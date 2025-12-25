@@ -187,14 +187,14 @@ def asset_create_json_payload(id, asset_type, current, asset_title=None):
         with rasterio.open(id) as src:
             original_res_x = abs(src.transform[0])
             original_res_y = abs(src.transform[4])
-            gsd = int(max(original_res_x, original_res_y))
+            gsd = max(original_res_x, original_res_y)
 
         payload = {
             "id": id_no_path,
             "title": title,
             "type": "image/tiff; application=geotiff; profile=cloud-optimized",
             "proj:epsg": 2056,
-            "eo:gsd": int(gsd)
+            "eo:gsd": gsd
         }
     elif asset_type == "KML":
         payload = {"id": id_no_path, "title": title, "type": "application/vnd.google-earth.kml+xml"}

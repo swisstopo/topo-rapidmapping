@@ -115,25 +115,41 @@ def create_thumbnail_from_cog(
     max_size: int = 256
 ) -> bool:
     """
-    Erstellt thumbnail.jpg mit gdal_translate subprocess.
-    
-    Args:
-        input_file (Path): Input COG-Datei
-        output_file (Path): Output thumbnail.jpg
-        max_size (int): Maximale Größe (Breite/Höhe)
-        
-    Returns:
-        bool: True bei Erfolg
+    Creates a thumbnail while maintaining aspect ratio using only subprocess calls.
+    Ensures neither width nor height exceeds max_size.
     """
     try:
-        logger.info(f"  Erstelle Thumbnail: {output_file.name}")
+        logger.info(f"  Analysing dimensions for: {input_file.name}")
+
+        # 1. Get image dimensions using gdalinfo -json
+        info_proc = subprocess.run(
+            ['gdalinfo', '-json', str(input_file)],
+            capture_output=True,
+            text=True,
+            check=True,
+            env={**os.environ, 'GDAL_PAM_ENABLED': 'NO'}
+        )
         
+        info_data = json.loads(info_proc.stdout)
+        width, height = info_data['size']
+
+        # 2. Logic: Fit the longest side to max_size, auto-scale the other
+        if width >= height:
+            # Landscape or Square: Set width to max_size, height auto
+            outsize_params = [str(max_size), '0']
+        else:
+            # Portrait: Set height to max_size, width auto
+            outsize_params = ['0', str(max_size)]
+
+        logger.info(f"  Erstelle Thumbnail: {output_file.name} (Target: {outsize_params})")
+
+        # 3. Run gdal_translate with the calculated aspect ratio
         with open(os.devnull, 'w') as devnull:
             result = subprocess.run(
                 [
                     'gdal_translate',
                     '-of', 'JPEG',
-                    '-outsize', str(max_size), str(max_size),
+                    '-outsize', outsize_params[0], outsize_params[1],
                     str(input_file),
                     str(output_file)
                 ],
@@ -142,14 +158,16 @@ def create_thumbnail_from_cog(
                 timeout=60,
                 env={**os.environ, 'GDAL_PAM_ENABLED': 'NO'}
             )
-        
+
         if result.returncode == 0 and output_file.exists():
             logger.info(f"  ✓ Thumbnail erstellt: {output_file}")
             return True
-        else:
-            logger.error(f"  ✗ Thumbnail-Erstellung fehlgeschlagen")
-            return False
         
+        return False
+
+    except subprocess.CalledProcessError as e:
+        logger.error(f"  ✗ GDAL Process Error: {e.stderr}")
+        return False
     except Exception as e:
         logger.error(f"  ✗ Thumbnail-Fehler: {e}")
         return False

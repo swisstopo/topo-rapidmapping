@@ -12,6 +12,7 @@ import main_multipart_upload_via_api
 from utilities import photo_processor
 from configuration import (
     ProductType, 
+    get_product_config,
     STAC_COLLECTION,
     GEOCAT_ID,
     STAC_SCHEME,
@@ -136,10 +137,13 @@ def item_create_json_payload(id, coordinates, dt_iso8601, title, geocat_id, curr
     # Check if the 'cleaned' variable contains the specific substring
     if "-ebo-photo-overview" in cleaned:
         # Use the generic camera icon (Purple color: 127,0,255)
-        thumbnail_url = ProductType.EBO['icon_url']
+        config = get_product_config(ProductType.EBO)
+        thumbnail_url = config['icon_url']
+
     elif "-ebn-photo-overview" in cleaned:
         # Use the generic camera icon (Purple color: 127,0,255)
-        thumbnail_url = ProductType.EBN['icon_url']
+        config = get_product_config(ProductType.EBN)
+        thumbnail_url = config['icon_url']
     else:
         # Use the specific generated thumbnail
         thumbnail_url = f"{domain}{STAC_COLLECTION}/{id}/thumbnail.jpg"

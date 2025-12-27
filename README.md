@@ -703,6 +703,25 @@ python util_stac_delete_ram.py
 **⚠️ Vorsicht:** Gelöschte Items können nicht wiederhergestellt werden!
 
 
+## Generate Executable binaries / EXE
+
+The WINDOWS version was created with pyinstaller. [quite a thing](https://stackoverflow.com/questions/56472933/pyinstaller-executable-fails).
+Solution steps
+
+1. Install pip packages
+   ```sh
+   pip install pyinstaller
+    ```
+2. run pyinstaller 
+   ```sh
+   pyinstaller --noconfirm --onefile --console --name rapidmapping_processor --add-data "configuration.py;." --add-data "utilities;utilities" --add-data "util_publish_stac_fsdi.py;." --add-data "main_multipart_upload_via_api.py;." --hidden-import=utilities.credentials --hidden-import=utilities.proxy_handler --hidden-import=utilities.file_handler --hidden-import=utilities.mosaic_processor --hidden-import=utilities.photo_processor --hidden-import=utilities.kml_generator --hidden-import=utilities.stac_publisher --hidden-import=rasterio --hidden-import=rasterio.serde --hidden-import=rasterio._shim --hidden-import=rasterio.sample --collect-submodules=rasterio rapidmapping_processor.py
+   ```
+  
+
+3. Create your secrets folder in the same dir
+  - `proxy_config.json`
+  - `stac_credentials.json`
+
 ## 📞 Support
 
 Bei Problemen:

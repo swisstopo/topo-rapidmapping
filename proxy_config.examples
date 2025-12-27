@@ -1,0 +1,25 @@
+{
+  "_comment": "Proxy-Konfiguration für Internet-Zugang",
+  "_instructions": [
+    "1. Kopiere diese Datei zu 'proxy_config.json'",
+    "2. Passe die Proxy-URLs an deine Umgebung an",
+    "3. Proxies werden in Reihenfolge getestet",
+    "4. Leer lassen für automatische Erkennung"
+  ],
+  "proxies": [
+    {
+      "name": "NAME PROXY 1",
+      "url": "http://proxy.ch:8080",
+      "verify_ssl": false,
+      "enabled": true
+    },
+    {
+      "name": "NAME PROXY 2",
+      "url": "http://another.proxy.ch:8080",
+      "enabled": false
+    }
+  ],
+  "test_url": "https://data.geo.admin.ch/browser/index.html",
+  "timeout": 5,
+  "disable_ssl_warnings": true
+}

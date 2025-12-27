@@ -1,58 +1,67 @@
-# Rapid Mapping Processor
+# Swisstopo Rapid Mapping Processor 2.0
 
 Automatisiertes System für die Publikation von Rapid Mapping Daten auf der FSDI STAC Plattform.
 
 ## 🎯 Übersicht
 
 Dieses Tool vereint die Funktionalität von:
-- `rm_publish_quickorthophoto.bat` (Orthophoto-Mosaike)
-- `rm_publish_einzelbilder.py` (Einzelbilder)
-- `util_publish_stac_fsdi.py` (STAC-Publikation)
+- Orthophoto-Mosaike
+- Einzelbilder
+- STAC-Publikation
 
-in einem einzigen, benutzerfreundlichen Workflow.
+in einem einzigen, benutzerfreundlichen Workflow mit automatischer Proxy-Erkennung und VPN-Support.
+
+### ⚡ Hauptfeatures
+
+- ✅ **Single COG-File Workflow**: Prüft ob Input bereits COG-konform ist (8-bit RGB, 3 Bänder)
+- ✅ **Automatische Proxy-Erkennung**: VPN- und Corporate-Proxy-Support mit SSL-Handling
+- ✅ **EXIF-Extraktion**: GPS und Zeitstempel aus Einzelbildern
+- ✅ **KML-Overview**: Automatische Generierung via STAC-Abfrage nach Upload
+- ✅ **Multi-Environment**: INT und PROD-Support
+- ✅ **Batch-Upload**: Einzelbilder werden sequenziell hochgeladen
+- ✅ **Error Handling**: Robuste Fehlerbehandlung mit detaillierten Logs
 
 ## 📁 Projektstruktur
 
-```bash
+```
 rapidmapping_processor/
 ├── rapidmapping_processor.py      # Hauptskript (CLI)
 ├── configuration.py                # Produktdefinitionen & Konfiguration
 ├── requirements.txt                # Python-Dependencies
+├── setup.bat                       # Windows Setup-Script
 ├── README.md                       # Diese Datei
 ├── utilities/                      # Hilfsfunktionen
-│   ├── __init__.py
-│   ├── credentials.py             # Credentials-Management
-│   ├── proxy_handler.py           # Proxy-Erkennung
+│   ├── credentials.py             # Credentials-Management (INT/PROD)
+│   ├── proxy_handler.py           # Proxy-Erkennung & VPN-Support
 │   ├── file_handler.py            # Datei-Operationen
-│   ├── mosaic_processor.py        # Orthophoto-Verarbeitung
+│   ├── mosaic_processor.py        # COG-File Processing
 │   ├── photo_processor.py         # Einzelbild-Verarbeitung
-│   └── stac_publisher.py          # STAC-Publikation
+│   ├── kml_generator.py           # KML-Overview via STAC-Abfrage
+│   └── stac_publisher.py          # STAC-Publikation Wrapper
 ├── secrets/                        # Credentials (NICHT in Git!)
-│   └── stac_credentials.json      # STAC API-Keys
+│   ├── stac_credentials.json      # STAC API-Keys (INT + PROD)
+│   └── proxy_config.json          # Proxy-Konfiguration
 ├── temp/                           # Temporäre Dateien (wird gelöscht)
-└── util_publish_stac_fsdi.py      # Bestehender STAC-Publisher
-    main_multipart_upload_via_api.py # Multipart-Upload
+├── util_publish_stac_fsdi.py      # Bestehender STAC-Publisher
+└── main_multipart_upload_via_api.py # Multipart-Upload
+
 ```
 
 ## 🚀 Installation
 
-### 1. GDAL-Tools installieren ( kommt mit QGIS)
+### 1. GDAL-Tools installieren (kommt mit QGIS)
 
 #### Windows (OSGeo4W Shell)
 1. Download: https://trac.osgeo.org/osgeo4w/
 2. Installiere GDAL-Pakete
 3. Führe Script in OSGeo4W Shell aus
 
-### 2. venv Python-Dependencies
-
+**ODER: Nutze QGIS** (empfohlen)
 ```bash
-"C:\Program Files\QGIS 3.40.7\apps\Python312\python.exe" -m venv .venv --system-site-packages
-.venv\Scripts\activate    
-
-pip install -r requirements.txt
+# QGIS enthält bereits GDAL
+# Öffne "OSGeo4W Shell" aus QGIS-Installation
+# Beispiel-Pfad: C:\Program Files\QGIS 3.40.7\OSGeo4W.bat
 ```
-
-
 
 #### Linux
 ```bash
@@ -60,7 +69,41 @@ sudo apt update
 sudo apt install gdal-bin python3-gdal
 ```
 
-### 3. Credentials konfigurieren
+### 2. Python Virtual Environment (empfohlen)
+
+#### Mit QGIS Python:
+```bash
+# Windows mit QGIS
+"C:\Program Files\QGIS 3.40.7\apps\Python312\python.exe" -m venv .venv --system-site-packages
+.venv\Scripts\activate
+
+# Linux
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+### 3. Python-Dependencies installieren
+
+```bash
+pip install -r requirements.txt
+```
+
+### 4. Automatisches Setup (Windows)
+
+```bash
+setup.bat
+```
+
+Dieses Script prüft:
+- ✓ Python-Installation
+- ✓ GDAL-Verfügbarkeit
+- ✓ Erstellt Verzeichnisstruktur
+- ✓ Installiert Dependencies
+- ✓ Prüft Credentials
+
+## 🔐 Konfiguration
+
+### STAC Credentials
 
 Erstelle `secrets/stac_credentials.json`:
 
@@ -78,14 +121,28 @@ Erstelle `secrets/stac_credentials.json`:
   }
 }
 ```
+
+**Alternative:** Environment Variables setzen:
+```bash
+# Windows
+set STAC_USERNAME=your_username
+set STAC_PASSWORD=your_password
+
+# Linux
+export STAC_USERNAME=your_username
+export STAC_PASSWORD=your_password
+```
+
+### Proxy-Konfiguration
+
 Erstelle `secrets/proxy_config.json`:
 
 ```json
 {
   "proxies": [
     {
-      "name": "Swiss Federal Admin Proxy",
-      "url": "http://proxy-bvcol.admin.ch:8080",
+      "name": "Mein Proxy",
+      "url": "http://mein-proxy.ch:8080",
       "enabled": true
     },
     {
@@ -95,145 +152,236 @@ Erstelle `secrets/proxy_config.json`:
     }
   ],
   "test_url": "https://data.geo.admin.ch/browser/index.html",
-  "timeout": 5
+  "timeout": 5,
+  "disable_ssl_warnings": true
 }
 ```
 
-
-**Alternative:** Environment Variables setzen:
-```bash
-export STAC_USERNAME=your_username
-export STAC_PASSWORD=your_password
-```
+**Features:**
+- ✅ **Automatische Proxy-Erkennung**: Testet direkte Verbindung zuerst
+- ✅ **VPN-Detection**: Erkennt VPN mit SSL-Inspection und deaktiviert SSL-Verifikation automatisch
+- ✅ **Multi-Proxy-Support**: Testet alle aktivierten Proxies in Reihenfolge
+- ✅ **Fallback**: Bei fehlender Config wird Default-Proxy versucht
 
 ## 💻 Verwendung
 
-INT-Environment (Standard)
+### Grundlegende Commands
 
 ```bash
+# INT-Environment (Standard)
 python rapidmapping_processor.py
-```
-PROD-Environment
 
-```bash
+# PROD-Environment
 python rapidmapping_processor.py --prod
-```
-Ohne Upload (nur lokale Verarbeitung)
-```bash
+
+# Ohne Upload (nur lokale Verarbeitung)
 python rapidmapping_processor.py --upload=False
 ```
 
-### Grundlegender Workflow
-
-1. QDOP RGB/NRG Mosaike
-Input: Verzeichnis mit TIF-Dateien
-Workflow:
-
-```bash
-1. Single-File-Check
-   ├─ Wenn 1 Datei + COG + 8-bit RGB → Direkt-Upload ⚡
-   └─ Sonst: Mosaic-Workflow
-2. Mosaic-Workflow (bei Multiple Files)
-   ├─ VRT-Mosaic erstellen (GDAL BuildVRT)
-   ├─ Warping mit GSD (GDAL Warp)
-   └─ COG-Konvertierung (GDAL Translate)
-3. STAC-Upload
-   └─ Item: ram-YYYY-MM-DDthhmmss-qdop-rgb-mosaic
-```
-Output:
-
-```bash
-ram-2024-07-15t143000-qdop-rgb-mosaic.tif
-```
-
-2. Einzelbilder (EBN/EBO)
-Input: Verzeichnis mit JPEG-Dateien
-```bash
-1. Photo-Verarbeitung
-   ├─ EXIF extrahieren (GPS + Timestamp)
-   └─ Thumbnail erstellen
-   
-2. Einzelner Upload pro Photo
-   ├─ Temporär umbenennen:
-   │  ├─ Photo: ram-YYYY-MM-DDthhmmss-ebn.jpg
-   │  └─ Thumbnail: thumbnail.jpg
-   ├─ STAC-Upload
-   └─ Rückbenennen zu Original
-   
-3. KML-Overview generieren
-   ├─ Sammle alle Photos des Tages
-   ├─ Erstelle KML mit Placemarks
-   └─ Upload als: ram-YYYY-MM-DDt235959-ebn-overview.kml
-```
-Output pro Photo:
-```bash
-Item: ram-2024-07-15t120000-ebn
-Assets:
-
-    ram-2024-07-15t120000-ebn.jpg (Original)
-    thumbnail.jpg (Thumbnail)
-```
-
-Output Overview:
-```bash
-Item: ram-2024-07-15t235959-ebn-overview
-Asset: ram-2024-07-15t235959-ebn-overview.km
-```
-### Interaktive Eingaben
+### Interaktiver Workflow
 
 Das Script führt durch folgende Schritte:
 
-1. **Proxy-Erkennung** (automatisch)
+1. **Credentials laden** (INT oder PROD)
 2. **Input-Verzeichnis** angeben
 3. **Produkttyp** auswählen:
    - QDOP RGB Mosaic
    - QDOP NRG Mosaic
    - Einzelbilder Nadir (EBN)
    - Einzelbilder Oblique (EBO)
-4. **Zeitstempel** (bei Mosaiken) oder EXIF-Extraktion (bei Einzelbildern)
-5. **GSD** (bei Mosaiken)
-6. Bestätigung und Start
+4. **Zeitstempel** (bei Mosaiken) oder nur Datum (bei Einzelbildern)
+5. **Bestätigung** und Start
 
-## 📦 Produkttypen
+## 📦 Produkttypen & Workflows
 
-### 1. QDOP RGB/NRG Mosaike
+### 1. QDOP RGB/NRG Mosaike (Orthophotos)
 
-**Input:** Verzeichnis mit TIF-Dateien (ADS100 Flightlines)
+#### Input Requirements
+- **Verzeichnis mit genau 1 TIF-Datei**
+- **COG-konform** (Cloud Optimized GeoTIFF)
+- **8-bit RGB** (3 Bänder, Datatype "Byte")
 
-**Output:**
-- COG-TIFF Mosaic: `ram-YYYY-MM-DDthhmmss-qdop-rgb-mosaic.tif`
-- STAC Item: `YYYY-MM-DDthhmmss`
+#### Workflow
+```
+1. Single-File-Check
+   ├─ Prüfe: Genau 1 Datei?
+   ├─ Prüfe: Ist COG? (Tiled + Overviews)
+   └─ Prüfe: Ist 8-bit RGB? (3 Bänder, Byte)
 
-**Workflow:**
-1. VRT-Mosaic erstellen
-2. Warping mit gewünschtem GSD
-3. COG-Konvertierung
-4. STAC-Upload
+2. Wenn alle Checks OK:
+   ├─ Kopiere Datei nach temp/
+   └─ Erstelle Thumbnail (thumbnail.jpg, 256px)
+
+3. STAC-Upload
+   ├─ Asset: ram-YYYY-MM-DDthhmmss-qdop-rgb-mosaic.tif
+   └─ Asset: thumbnail.jpg
+```
+
+#### Output-Naming
+```
+Item:  ram-2024-07-15t143000-qdop-rgb-mosaic
+Asset: ram-2024-07-15t143000-qdop-rgb-mosaic.tif
+Asset: thumbnail.jpg
+```
+
+#### Wenn Input NICHT COG-konform ist
+
+Script gibt Fehler aus mit Anleitung zur COG-Konvertierung:
+
+```bash
+✗ Datei ist KEIN Cloud Optimized GeoTIFF (COG)!
+  Bitte konvertiere zu COG mit:
+    gemäss https://github.com/geostandards-ch/cog-best-practices#lossy-visual-image-with-transparency
+```
+
+**Externes Mosaic-Erstellungs-Script verfügbar:**
+- `rm_publish_quickorthophoto.bat` für ADS100 Flightline-Mosaike
+- Erstellt VRT → Warp → COG Pipeline
 
 ### 2. Einzelbilder (Nadir/Oblique)
 
-**Input:** Verzeichnis mit JPEG-Dateien
+#### Input Requirements
+- **Verzeichnis mit JPEG-Dateien**
+- **EXIF-Daten erforderlich**: GPS + Zeitstempel
 
-**Output:**
-- Thumbnails: `thumbs/*.jpg` (640x480px)
-- KML-Datei: `ram-YYYY-MM-DDt235959-ebn.kml`
-- URL-Liste: `ram-YYYY-MM-DDt235959-ebn.txt`
+#### Workflow
+```
+1. Für jedes Foto:
+   ├─ EXIF extrahieren (gdalinfo)
+   │  ├─ GPS-Koordinaten (Lat/Lon)
+   │  └─ Zeitstempel (EXIF_DateTimeOriginal)
+   │
+   ├─ Foto umbenennen in temp_dir
+   │  → ram-YYYY-MM-DDthhmmss-ebn.jpg
+   │
+   ├─ Thumbnail erstellen (gdal_translate)
+   │  → thumbnail.jpg (640x480px, Aspect Ratio erhalten)
+   │
+   ├─ STAC-Upload (beide Assets)
+   │  ├─ ram-YYYY-MM-DDthhmmss-ebn.jpg
+   │  └─ thumbnail.jpg
+   │
+   └─ Cleanup (temp-Dateien löschen)
 
-**Workflow:**
-1. EXIF-Extraktion (GPS + Zeitstempel)
-2. Thumbnail-Erstellung
-3. KML-Generierung mit Placemarks
-4. STAC-Upload (KML + Photos)
+2. Nach allen Uploads:
+   ├─ Generiere Download-Liste
+   │  → YYYY-MM-DD-ebn.txt (alle URLs)
+   │
+   └─ Generiere KML-Overview (via STAC-Abfrage)
+      ├─ Abfrage: Alle Items des Tages
+      ├─ Erstelle KML mit Placemarks
+      │  └─ Icon, Thumbnail, GPS-Position
+      └─ Upload als: ram-YYYY-MM-DDt235959-ebn-overview.kml
+```
 
-## 🔧 Konfiguration
+#### Output-Naming (pro Foto)
+```
+Item:  ram-2024-07-15t120523-ebn
+Asset: ram-2024-07-15t120523-ebn.jpg (Original)
+Asset: thumbnail.jpg (640x480px Thumbnail)
+```
 
-### Produktkonfiguration (`configuration.py`)
+#### Output-Naming (KML-Overview)
+```
+Item:  ram-2024-07-15t235959-ebn-overview
+Asset: ram-2024-07-15t235959-ebn-overview.kml
+```
+
+#### GPS-Koordinaten Handling
+- **DMS → Dezimal-Konvertierung** (6 Dezimalstellen Präzision)
+- **Warnung bei fehlenden GPS-Daten**: Foto wird übersprungen
+- **KML**: Nur Fotos mit GPS-Daten werden eingebunden
+
+## 🗺️ KML-Overview Generation
+
+Nach Upload aller Einzelbilder wird automatisch ein KML-Overview erstellt:
+
+### Funktionsweise
+1. **STAC-Abfrage**: Suche alle Items des Tages mit Produkt-Suffix
+2. **Filter**: Nur Fotos (keine Overview-KMLs)
+3. **KML-Erstellung**:
+   - Placemarks mit GPS-Position
+   - Icon (konfigurierbar per Produkttyp)
+   - Thumbnail-Preview
+   - Link zum Fullres-Download
+4. **Upload**: Als eigenes STAC-Item mit Zeitstempel 23:59:59
+
+### KML-Beispiel (vereinfacht)
+```xml
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>2024-07-15 Einzelbilder Nadir</name>
+    <Style id="image_style">
+      <IconStyle>
+        <scale>0.75</scale>
+        <Icon><href>https://map.geo.admin.ch/.../camera@1x.png</href></Icon>
+      </IconStyle>
+    </Style>
+    <Placemark>
+      <description><![CDATA[
+        <a href="https://data.geo.admin.ch/.../photo.jpg">Download</a>
+        <br><img src="https://data.geo.admin.ch/.../thumbnail.jpg">
+      ]]></description>
+      <Point><coordinates>7.654321,46.123456,0</coordinates></Point>
+    </Placemark>
+  </Document>
+</kml>
+```
+
+## 📋 Namenskonventionen
+
+### Format
+```
+ram-YYYY-MM-DDthhmmss-{product}-{type}.ext
+
+Komponenten:
+- ram:          Rapid Mapping Prefix
+- YYYY-MM-DD:   Datum
+- t:            Separator
+- hhmmss:       Zeit (UTC)
+- {product}:    qdop-rgb | qdop-nrg | ebn | ebo
+- {type}:       mosaic | photo | overview (optional)
+- .ext:         .tif | .jpg | .kml
+```
+
+### Beispiele
+```
+Mosaike:
+- ram-2024-07-15t143000-qdop-rgb-mosaic.tif
+- ram-2024-07-15t143000-qdop-nrg-mosaic.tif
+
+Einzelbilder:
+- ram-2024-07-15t120523-ebn.jpg
+- ram-2024-07-15t134512-ebo.jpg
+
+Overview:
+- ram-2024-07-15t235959-ebn-overview.kml
+- ram-2024-07-15t235959-ebo-overview.kml
+
+Thumbnails:
+- thumbnail.jpg (immer gleicher Name pro Item)
+```
+
+### STAC Item IDs
+```
+Format: ram-YYYY-MM-DDthhmmss-{product}
+
+Beispiele:
+- ram-2024-07-15t143000-qdop-rgb-mosaic
+- ram-2024-07-15t120523-ebn
+- ram-2024-07-15t235959-ebn-overview
+```
+
+## 🔧 Konfigurationsdateien
+
+### configuration.py
 
 ```python
 # STAC-Einstellungen
 STAC_COLLECTION = "ch.swisstopo.spezialbefliegungen"
+GEOCAT_ID = "1d0fc41e-9526-41ef-bdcf-94ed7626abbd"
 STAC_HOSTNAME = "sys-data.int.bgdi.ch"  # INT
-# STAC_HOSTNAME = "data.geo.admin.ch"   # PROD
+STAC_HOSTNAME_PROD = "data.geo.admin.ch"  # PROD
 
 # COG-Einstellungen
 COG_CONFIG = {
@@ -245,80 +393,91 @@ COG_CONFIG = {
 # Thumbnail-Einstellungen
 THUMBNAIL_CONFIG = {
     'max_width': 640,
-    'max_height': 480
+    'max_height': 480,
+    'format': 'JPEG'
 }
+
+# Produkttypen
+class ProductType(Enum):
+    QDOP_RGB = "qdop-rgb"
+    QDOP_NRG = "qdop-nrg"
+    EBN = "ebn"  # Einzelbilder Nadir
+    EBO = "ebo"  # Einzelbilder Oblique
 ```
 
-### Proxy-Konfiguration
-
-Automatische Erkennung mit Fallback:
-1. Direkte Verbindung testen
-2. Bei Fehler: Swiss Federal Proxy verwenden (`proxy-bvcol.admin.ch:8080`)
-
-## 📋 Namenskonventionen
-
-### Dateinamen
-```
-ram-YYYY-MM-DDthhmmss-{product}-{type}.ext
-
-Beispiele:
-- ram-2024-07-15t143000-qdop-rgb-mosaic.tif
-- ram-2024-07-15t143000-ebn.kml
-```
-
-### STAC Items
-```
-YYYY-MM-DDthhmmss (lowercase)
-
-Beispiel: 2024-07-15t143000
-```
-
-## 🔐 Sicherheit
-
-- **Credentials**: NIE in Git committen! 
-- **secrets/**: Im `.gitignore` hinzufügen
-- **Environment Variables**: Sicherer als Config-Files
-
-```bash
-# .gitignore
-secrets/
-temp/
-*.pyc
-__pycache__/
-```
-
-## 🐛 Troubleshooting
+## 🛠️ Troubleshooting
 
 ### GDAL nicht gefunden
 ```
 ✗ GDAL-Tools nicht verfügbar
 ```
-**Lösung:** GDAL installieren und in PATH hinzufügen
+**Lösung:** 
+- GDAL installieren (siehe Installation)
+- OSGeo4W Shell verwenden
+- PATH prüfen: `gdalinfo --version`
 
 ### Keine Internet-Verbindung
 ```
 ✗ Keine Internet-Verbindung möglich
 ```
-**Lösung:** Proxy-Einstellungen prüfen oder manuell in `proxy_handler.py` setzen
+**Lösung:** 
+- Proxy-Einstellungen prüfen in `secrets/proxy_config.json`
+- Proxy-URL testen: `curl -x http://mein-proxy:8080 https://data.geo.admin.ch`
+- Bei VPN: Script erkennt automatisch SSL-Inspection und passt Settings an
 
 ### Credentials fehlen
 ```
 ✗ Keine Credentials gefunden
 ```
-**Lösung:** `secrets/stac_credentials.json` erstellen oder Environment Variables setzen
+**Lösung:** 
+- `secrets/stac_credentials.json` erstellen (siehe Konfiguration)
+- ODER Environment Variables setzen
+- Format prüfen (JSON muss gültig sein)
 
 ### GPS-Daten fehlen
 ```
 ⚠ Keine GPS-Daten gefunden
 ```
-**Lösung:** Überprüfen ob EXIF-Tags in JPEGs vorhanden sind
+**Lösung:** 
+- EXIF-Tags in JPEGs prüfen
+- `gdalinfo photo.jpg` ausführen
+- GPS-Schreibrechte in Kamera prüfen
 
-## 📝 Logging
+### COG-Check fehlgeschlagen
+```
+✗ Datei ist KEIN Cloud Optimized GeoTIFF (COG)!
+```
+**Lösung:**
+```bash
+# Konvertiere zu COG
+gdal_translate -of COG \
+  -co COMPRESS=JPEG \
+  -co QUALITY=75 \
+  -co BLOCKSIZE=256 \
+  input.tif output_cog.tif
+```
+
+### VPN-Verbindung mit SSL-Problemen
+```
+⚠ VPN-Verbindung erkannt - SSL-Handling wird angepasst
+```
+**Erklärung:** Script erkennt automatisch VPN mit SSL-Inspection und deaktiviert SSL-Verifikation.
+
+**Manueller Override** (falls Probleme):
+```json
+// In secrets/proxy_config.json
+{
+  "disable_ssl_warnings": true,
+  // ...
+}
+```
+
+## 📊 Logging
 
 Das Script gibt detailliertes Feedback:
 
 ```
-INFO: ✓ Erfolgreiche Operation
+INFO:  ✓ Erfolgreiche Operation
 WARNING: ⚠ Warnung (nicht kritisch)
 ERROR: ✗ Fehler (kritisch)
 ```
@@ -327,32 +486,73 @@ ERROR: ✗ Fehler (kritisch)
 
 In `rapidmapping_processor.py`:
 ```python
-logging.basicConfig(level=logging.DEBUG)  # Mehr Details
-logging.basicConfig(level=logging.INFO)   # Standard
-logging.basicConfig(level=logging.WARNING) # Nur Warnungen
+# Zeile 51-54
+logging.basicConfig(
+    level=logging.DEBUG,  # DEBUG | INFO | WARNING | ERROR
+    format='%(levelname)s: %(message)s'
+)
 ```
 
-## 🔄 Workflow-Diagramm
+### Temp-Verzeichnis bei Fehlern
 
+Bei Fehlern bleibt `temp/` erhalten für Debugging:
 ```
-Input Directory
+temp/
+├── ram-2024-07-15t120523-ebn.jpg  # Umbenanntes Foto
+├── thumbnail.jpg                   # Thumbnail
+└── ...                             # Weitere temporäre Dateien
+```
+
+## 📄 Workflow-Diagramm
+
+### Orthophoto-Mosaike
+```
+Input Directory (1 TIF-Datei)
     │
-    ├─[Mosaike]─> get_tif_files() ─> create_cog_mosaic()
-    │                                       │
-    │                                       ├─ VRT
-    │                                       ├─ Warp
-    │                                       └─ COG
-    │                                           │
-    │                                           └─> publish_to_stac()
+    ├─ Single-File-Check
+    │  ├─ Ist COG? (Tiled + Overviews)
+    │  └─ Ist 8-bit RGB? (3 Bänder, Byte)
     │
-    └─[Photos]──> get_jpg_files() ─> process_individual_photos()
-                                            │
-                                            ├─ Extract EXIF
-                                            ├─ Create Thumbnails
-                                            ├─ Generate KML
-                                            └─ Generate URL-List
-                                                │
-                                                └─> publish_to_stac()
+    ├─ Copy zu temp_dir
+    │  └─ ram-YYYY-MM-DDthhmmss-qdop-rgb-mosaic.tif
+    │
+    ├─ Erstelle Thumbnail
+    │  └─ thumbnail.jpg (256px)
+    │
+    └─ STAC-Upload
+       ├─ Asset: .tif
+       └─ Asset: thumbnail.jpg
+```
+
+### Einzelbilder
+```
+Input Directory (Multiple JPEGs)
+    │
+    └─ Für jedes Foto:
+       │
+       ├─ EXIF extrahieren (GPS + Zeit)
+       │
+       ├─ Copy + Rename zu temp_dir
+       │  └─ ram-YYYY-MM-DDthhmmss-ebn.jpg
+       │
+       ├─ Erstelle Thumbnail
+       │  └─ thumbnail.jpg (640x480px)
+       │
+       ├─ STAC-Upload
+       │  ├─ Asset: .jpg
+       │  └─ Asset: thumbnail.jpg
+       │
+       └─ Cleanup temp-Dateien
+
+Nach allen Uploads:
+    │
+    ├─ Generiere Download-Liste
+    │  └─ YYYY-MM-DD-ebn.txt
+    │
+    └─ Generiere KML-Overview
+       ├─ STAC-Abfrage: Alle Items des Tages
+       ├─ Erstelle KML mit Placemarks
+       └─ STAC-Upload: ram-YYYY-MM-DDt235959-ebn-overview.kml
 ```
 
 ## 🤝 Integration mit bestehenden Scripts
@@ -363,49 +563,91 @@ Das System nutzt die bestehenden Module:
 
 Diese Module werden **NICHT modifiziert** und müssen im gleichen Verzeichnis liegen.
 
+## 🔒 Sicherheit
+
+### Credentials
+- **NIE in Git committen!**
+- `secrets/` in `.gitignore` hinzufügen
+- Environment Variables verwenden für CI/CD
+
+### .gitignore Beispiel
+```bash
+# Credentials & Secrets
+secrets/
+*.json
+
+# Temporary Files
+temp/
+*.pyc
+__pycache__/
+.venv/
+
+# Logs
+*.log
+```
+
+## 🚦 Übergabe an CMS (rapidmapping.ch)
+
+Nach erfolgreichem Upload gibt das Script URLs aus für die Integration auf rapidmapping.ch:
+
+### Orthophotos
+```
+Nächster Schritt für Quick Digital Orthophoto RGB:
+1) URL öffnen: https://map.geo.admin.ch/#/map?layers=COG|https://data.geo.admin.ch/ch.swisstopo.spezialbefliegungen/ram-2024-07-15t143000-qdop-rgb-mosaic/ram-2024-07-15t143000-qdop-rgb-mosaic.tif
+2) Kartenausschnitt: als iFrame in rapidmapping.ch integrieren
+```
+
+### Einzelbilder
+```
+Nächster Schritt für Einzelbilder Nadir:
+1) URL öffnen: https://map.geo.admin.ch/#/map?layers=KML|https://data.geo.admin.ch/ch.swisstopo.spezialbefliegungen/ram-2024-07-15t235959-ebn-overview/ram-2024-07-15t235959-ebn-overview.kml
+2) Kartenausschnitt: als iFrame in rapidmapping.ch integrieren
+3) Downloadliste: 2024-07-15-ebn.txt
+```
+
 ## 📞 Support
 
 Bei Problemen:
 1. Log-Output prüfen
 2. `temp/` Verzeichnis inspizieren (wird bei Fehler nicht gelöscht)
-3. Issue im Repository erstellen
+3. GDAL-Installation testen: `gdalinfo --version`
+4. Proxy-Verbindung testen (siehe Troubleshooting)
+
+## ⚡ Performance-Tipps
+
+### Upload-Geschwindigkeit
+- **Multipart-Upload**: Automatisch für große Dateien (>100MB)
+- **Batch-Processing**: Einzelbilder werden sequenziell verarbeitet
+- **Thumbnail-Größe**: 640x480px für schnelleren Upload
+
+### Proxy/VPN
+- **VPN-Detection**: Automatisch SSL-Handling anpassen
+- **Proxy-Tests**: Cached nach erstem Durchlauf
+- **Timeout**: Anpassbar in `proxy_config.json`
+
+## 📚 Weiterführende Dokumentation
+
+- **GDAL COG Best Practices**: https://github.com/geostandards-ch/cog-best-practices
+- **STAC Specification**: https://stacspec.org/
+- **FSDI STAC Browser**: https://data.geo.admin.ch/browser/
+- **OSGeo4W**: https://trac.osgeo.org/osgeo4w/
 
 ## 📄 Lizenz
 
 Swisstopo Internal Use Only
 
-## ✨ Features
+## ✨ Version History
 
-- ✅ Automatische Proxy-Erkennung
-- ✅ Flexible Credentials (File/Env)
-- ✅ Interaktive CLI
-- ✅ Detailliertes Logging
-- ✅ Error Handling & Recovery
-- ✅ Temp-Cleanup bei Erfolg
-- ✅ Progress-Feedback
-- ✅ Batch-Upload Support
+### v2.0 (2025-01)
+- ✅ Single COG-File Workflow (kein Mosaic mehr im Script)
+- ✅ Subprocess-basiertes GDAL (keine Python-Bindings erforderlich)
+- ✅ VPN-Support mit automatischer SSL-Erkennung
+- ✅ KML-Overview via STAC-Abfrage nach Upload
+- ✅ Batch-Upload für Einzelbilder
+- ✅ Robustes Error Handling
+- ✅ Multi-Environment Support (INT/PROD)
 
-
-## Projektstruktur
-
-rapidmapping_processor/
-├── rapidmapping_processor.py          # Hauptskript v2.0
-├── configuration.py                    # Produktdefinitionen
-├── requirements.txt                    # GDAL Python-Bindings!
-├── README_v2.md                        # Diese Datei
-├── utilities/
-│   ├── __init__.py
-│   ├── credentials.py                 # INT/PROD-Support
-│   ├── proxy_handler.py               # JSON-Config
-│   ├── file_handler.py
-│   ├── gdal_utils.py                  # ⭐ NEU: GDAL-Bindings
-│   ├── stac_query.py                  # ⭐ NEU: STAC-Abfragen
-│   ├── mosaic_processor.py            # Mit GDAL-Bindings
-│   ├── photo_processor.py             # Mit GDAL-Bindings
-│   └── stac_publisher.py              # Environment-Support
-├── secrets/
-│   ├── stac_credentials.json          # INT + PROD
-│   └── proxy_config.json              # Mehrere Proxies
-├── temp/                               # Temporäre Dateien
-└── util_publish_stac_fsdi.py          # Bestehend
-    main_multipart_upload_via_api.py
+### v1.0 (Legacy)
+- ✓ Mosaic-Erstellung im Script
+- ✓ Basic STAC-Upload
+- ✓ Einzelbild-Verarbeitung

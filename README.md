@@ -605,6 +605,104 @@ Nächster Schritt für Einzelbilder Nadir:
 3) Downloadliste: 2024-07-15-ebn.txt
 ```
 
+## 🛠️ Utilities
+
+Wir stellen mehrere Hilfs-Scripts zur Verfügung, die bei verschiedenen Aufgaben unterstützen. Diese befinden sich im Verzeichnis [utilities](utilities/).
+
+### rm_publish_quickorthophoto.sh/bat
+
+#### Beschreibung
+Ein Bash/DOS-Script zur Automatisierung der Publikation von Quick-Orthophoto-Produkten. Verarbeitet Exporte von ADS100-Flightlines (GeoTIFF-Dateien) und erstellt ein nahtloses Mosaic, das anschließend in ein Cloud Optimized GeoTIFF (COG) mit RGB-Bändern konvertiert wird. Basiert auf https://github.com/geostandards-ch/cog-best-practices
+
+#### Features
+- **Interaktive Eingabeaufforderungen** für Input/Output-Verzeichnisse, Dateiname und GSD (Ground Sample Distance)
+- **Verwendet GDAL-Tools** (gdalbuildvrt, gdalwarp, gdal_translate) für effiziente Verarbeitung
+- **Verarbeitet große Datensätze** mit Multi-Threading und optimierten Einstellungen
+
+#### Verwendung
+Führen Sie das Script in Ihrer Shell (Linux oder OSGeo4W Shell) oder Windows/DOS Eingabeaufforderung aus:
+
+**Linux:**
+```sh
+bash rm_publish_quickorthophoto.sh /pfad/zum/input_ordner /pfad/zum/output_ordner
+```
+
+**Windows/DOS:**
+```sh
+rm_publish_quickorthophoto.bat /pfad/zum/input_ordner /pfad/zum/output_ordner
+```
+
+- Ersetzen Sie `/pfad/zum/input_ordner` mit Ihrem Orthophoto-Quellverzeichnis
+- Ersetzen Sie `/pfad/zum/output_ordner` mit Ihrem gewünschten Zielverzeichnis
+
+---
+
+### rm_process_pug_images.py
+
+#### Beschreibung
+Dieses Script verarbeitet PUG-Bilder ([Beispiel](https://data.geo.admin.ch/ch.swisstopo.rapidmapping/data/2024-008-TICINO/i240630_121859-0.jpg)) durch Extraktion von EXIF-Daten, Anwendung von Masken und Erstellung einer KML-Datei mit Bild-Vorschauen und Standortdaten.
+
+#### Features
+- Extrahiert Text aus vordefinierten Begrenzungsrahmen mit EasyOCR
+- Wendet Masken auf Bilder an und speichert die maskierten Bilder
+- Extrahiert und modifiziert EXIF-Daten (Datum, Zeit, GPS-Koordinaten)
+- Generiert eine KML-Datei mit Bild-Vorschauen und Koordinaten
+- Protokolliert Fehler für Bilder, die nicht georeferenziert werden können
+
+#### Verwendung
+
+##### Python
+Dieses Script benötigt zusätzliche Python-Module. Getestet mit Python 3.10.12 und 3.11.9.
+```sh
+pip install -r requirements.txt
+python rm_process_pug_images.py
+```
+
+**Ablauf:**
+1. Führen Sie das Script aus
+2. Geben Sie den Pfad zum Input-Verzeichnis ein (enthält PNG-Bilder)
+3. Geben Sie den Pfad zum Output-Verzeichnis ein (für verarbeitete Bilder und KML-Datei)
+4. Falls `pgu_mask.png` nicht im aktuellen Verzeichnis gefunden wird, geben Sie den Pfad dazu an
+5. Das Script verarbeitet jedes Bild, wendet Masken an, extrahiert EXIF-Daten und erstellt eine KML-Datei mit Bild-Vorschauen und Koordinaten
+6. Eine Fehler-Datei (`not_processed.txt`) wird für Dateien erstellt, die nicht georeferenziert werden konnten
+
+##### Ausführbare Binärdateien / EXE
+Download von [v0.0.1-alpha](https://github.com/swisstopo/topo-rapidmapping/releases/tag/v0.0.1-alpha)
+
+**Benötigte Dateien:**
+- `pgu_mask.png`
+- Ordner `models` inkl. Inhalt
+- `rm_process_pug_images.exe`
+
+**Ablauf:**
+1. Führen Sie `rm_process_pug_images.exe` aus
+2. Folgen Sie den interaktiven Eingabeaufforderungen (siehe Python-Ablauf oben)
+
+---
+
+### util_stac_delete_ram.py
+
+#### Beschreibung
+Hilfs-Script zum Löschen von Rapid-Mapping-Items aus der STAC-Plattform.
+
+#### Features
+- Löschen einzelner Items oder ganzer Datensätze
+- Sicherheitsabfrage vor Löschung
+- Unterstützung für INT und PROD-Umgebungen
+
+#### Verwendung
+```bash
+python util_stac_delete_ram.py
+```
+
+**Interaktiver Ablauf:**
+1. Wählen Sie Umgebung (INT/PROD)
+2. Geben Sie Item-Name oder Datum ein
+3. Bestätigen Sie die Löschung
+
+**⚠️ Vorsicht:** Gelöschte Items können nicht wiederhergestellt werden!
+
+
 ## 📞 Support
 
 Bei Problemen:
@@ -634,7 +732,7 @@ Bei Problemen:
 
 ## 📄 Lizenz
 
-Swisstopo Internal Use Only
+MIT
 
 ## ✨ Version History
 

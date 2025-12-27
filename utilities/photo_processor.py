@@ -24,6 +24,41 @@ from utilities.file_handler import get_jpg_files
 
 logger = logging.getLogger(__name__)
 
+def generate_csv_from_photos(
+    photos: List[Dict],
+    output_file: Path,
+    stac_scheme: str = "https",
+    hostname: str = "your-domain.com",
+    stac_collection: str = "your-collection"
+) -> bool:
+    """
+    Generates CSV file with only URLs from the list of photo dictionaries.
+    
+    Args:
+        photos: List of photo dictionaries
+        output_file: Path to output CSV file
+        stac_scheme: URL scheme (http/https)
+        hostname: Domain hostname
+        stac_collection: STAC collection name
+    
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        with open(output_file, 'w', encoding='utf-8') as csvfile:
+            count = 0
+            for photo in photos:
+                # Generate URL
+                url = f"{stac_scheme}://{hostname}/{stac_collection}/{photo['item_name']}/{photo['asset_name']}.jpg"
+                csvfile.write(f"{url}\n")
+                count += 1
+            
+        print(f"✓ CSV created: {output_file} ({count} URLs)")
+        return True
+        
+    except Exception as e:
+        print(f"✗ CSV creation failed: {e}")
+        return False
 
 def dms_to_decimal(degrees: float, minutes: float, seconds: float, direction: str) -> float:
     """
@@ -428,15 +463,15 @@ def process_individual_photos(
                         logger.info(f"  6️⃣  Lade Thumbnail zu STAC hoch...")
                         logger.info(f"     → Upload als: thumbnail.jpg")
                         
-                        # thumbnail_upload_success = publish_to_stac_wrapper(
-                        #     asset_path=temp_thumbnail_path,
-                        #     item_name=item_name,
-                        #     collection=stac_collection,
-                        #     geocat_id=geocat_id,
-                        #     hostname=hostname,
-                        #     asset_title="THUMBNAIL",
-                        #     environment=environment
-                        # )
+                        thumbnail_upload_success = publish_to_stac_wrapper(
+                            asset_path=temp_thumbnail_path,
+                            item_name=item_name,
+                            collection=stac_collection,
+                            geocat_id=geocat_id,
+                            hostname=hostname,
+                            asset_title="THUMBNAIL",
+                            environment=environment
+                        )
                         
 
 

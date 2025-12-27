@@ -1,4 +1,5 @@
 import os
+import subprocess
 import requests
 import rasterio
 from datetime import datetime
@@ -8,6 +9,7 @@ import time
 import json
 import logging
 import main_multipart_upload_via_api
+from utilities import photo_processor
 from configuration import (
     ProductType, 
     STAC_COLLECTION,
@@ -131,7 +133,16 @@ def item_create_json_payload(id, coordinates, dt_iso8601, title, geocat_id, curr
     # Create the product name with prefix
     product = f'ch.swisstopo.{cleaned}'
 
-    thumbnail_url = f"{domain}{STAC_COLLECTION}/{id}/thumbnail.jpg"
+    # Check if the 'cleaned' variable contains the specific substring
+    if "-ebo-photo-overview" in cleaned:
+        # Use the generic camera icon (Purple color: 127,0,255)
+        thumbnail_url = ProductType.EBO['icon_url']
+    elif "-ebn-photo-overview" in cleaned:
+        # Use the generic camera icon (Purple color: 127,0,255)
+        thumbnail_url = ProductType.EBN['icon_url']
+    else:
+        # Use the specific generated thumbnail
+        thumbnail_url = f"{domain}{STAC_COLLECTION}/{id}/thumbnail.jpg"
 
     # Build base links
     links = [
@@ -141,18 +152,30 @@ def item_create_json_payload(id, coordinates, dt_iso8601, title, geocat_id, curr
         }
     ]
 
-    # Only add visual link if cleaned contains "-qdop-"
+    # Only add COG visual link if cleaned contains "-qdop-"
     if "-qdop-" in cleaned:
         links.insert(0, {
             "href": f"https://map.geo.admin.ch/#/map?layers=COG|{domain}{STAC_COLLECTION}/{id}/{asset}",
             "rel": "visual"
         })
+    
+    # Only add KML visual link if cleaned contains "-photo-overview"
+    if "-photo-overview" in cleaned:
+        links.insert(0, {
+            "href": f"https://map.geo.admin.ch/#/map?layers=KML|{domain}{STAC_COLLECTION}/{id}/{asset}",
+            "rel": "visual"
+        })
 
+    # Check if it is a Point (2 items, both numbers)
+    is_point = len(coordinates) == 2 and isinstance(coordinates[0], (int, float))
+
+    # Warning: Point is offically only supported in v1.0 of teh FSDI STAC API https://data.geo.admin.ch/api/stac/static/spec/v1/apitransactional.html#tag/Data/operation/getFeature  but as Juergen mentioned it might work as well in v0.9 https://data.geo.admin.ch/api/stac/static/spec/v0.9/apitransactional.html#tag/Data-Management/operation/putFeature if if it snot doumented.. and it seesm to work
     payload = {
         "id": id,
         "geometry": {
-            "type": "Polygon",
-            "coordinates": [coordinates],
+            "type": "Point" if is_point else "Polygon",
+            # For Point, use coordinates directly. For Polygon, wrap in list for the ring.
+            "coordinates": coordinates if is_point else [coordinates],
         },
         "properties": {
             "datetime": dt_iso8601,
@@ -160,6 +183,7 @@ def item_create_json_payload(id, coordinates, dt_iso8601, title, geocat_id, curr
         },
         "links": links
     }
+
     return payload
 
 def asset_create_title(asset, current):
@@ -315,6 +339,7 @@ def publish_to_stac(username, password, asset, item_name, collection, geocat_id,
             'csv': 'CSV',
             'json': 'JSON',
             'jpg': 'JPEG',
+            'kml': 'KML',
             'geojson': 'GEOJSON',
             'parquet': 'PARQUET',
             'tif': 'TIF',
@@ -343,19 +368,42 @@ def publish_to_stac(username, password, asset, item_name, collection, geocat_id,
                     transformer_lv95_to_wgs84.transform(*coord)
                     for coord in coordinates_lv95
                 ]
+            if asset_type == 'JPEG':
+                
+                lat, lon, exif_timestamp = photo_processor.extract_exif_data(orig_asset)
+                coordinates_wgs84 =[lon,lat]
 
-                # Convert datetime
-                date_part = re.search(r'(\d{4}-\d{2}-\d{2}t\d{6})', raw_item).group(1)
-                dt = datetime.strptime(date_part, '%Y-%m-%dT%H%M%S')
-                dt_iso8601 = dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+            if asset_type == 'KML':
+                cmd = ['ogrinfo', '-so', '-al', orig_asset]
+                result = subprocess.run(cmd, capture_output=True, text=True)
+                # Parse output looking for: "Extent: (8.5, 47.3) - (8.6, 47.4)"
+                # Regex captures groups: 1=minx, 2=miny, 3=maxx, 4=maxy
+                match = re.search(r'Extent:\s*\(([^,]+),\s*([^)]+)\)\s*-\s*\(([^,]+),\s*([^)]+)\)', result.stdout)
+                if match:
+                    minx, miny, maxx, maxy = map(float, match.groups())
+                    
+                    coordinates_wgs84 =[
+                        [minx, miny],
+                        [maxx, miny],
+                        [maxx, maxy],
+                        [minx, maxy],
+                        [minx, miny]
+                    ]
+                else:
+                    raise ValueError("Could not find Extent in ogrinfo for KML output")
+            
+            # Convert datetime
+            date_part = re.search(r'(\d{4}-\d{2}-\d{2}t\d{6})', raw_item).group(1)
+            dt = datetime.strptime(date_part, '%Y-%m-%dT%H%M%S')
+            dt_iso8601 = dt.strftime('%Y-%m-%dT%H:%M:%SZ')
 
-                # Create and upload item
-                payload = item_create_json_payload(
-                    item, coordinates_wgs84, dt_iso8601,
-                    item_title, geocat_id, current, stac_hostname, asset
-                )
+            # Create and upload item
+            payload = item_create_json_payload(
+                item, coordinates_wgs84, dt_iso8601,
+                item_title, geocat_id, current, stac_hostname, asset
+            )
 
-                upload_item(stac_path + item_path, payload, username, password)
+            upload_item(stac_path + item_path, payload, username, password)
 
         except Exception as e:
             print(f"An error occurred creating object {item}: {e}")

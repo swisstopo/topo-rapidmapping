@@ -63,7 +63,7 @@ def query_stac_items_by_date(
             
             for asset_key, asset_val in assets.items():
                 href = asset_val.get("href")
-                if asset_key == 'thumbnail.png':
+                if asset_key == 'thumbnail.jpg':
                     thumbnail_url = href
                 elif product_suffix in asset_key and asset_key.endswith(('.jpg', '.jpeg')):
                     asset_url = href
@@ -103,6 +103,7 @@ def generate_kml_from_stac_items(
     """
     Generates KML file from the list of item dictionaries.
     """
+    date_str=items[0]['item_id'].split('-', 1)[1][:10]
     try:
         with open(output_file, 'w', encoding='utf-8') as kml:
             # KML Header
@@ -112,13 +113,13 @@ def generate_kml_from_stac_items(
             kml.write('xmlns:gx="http://www.google.com/kml/ext/2.2"\n')
             kml.write('xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"\n')
             kml.write('xsi:schemaLocation="http://www.opengis.net/kml/2.2 https://developers.google.com/kml/schema/kml22gx.xsd">\n')
-            kml.write(f'<Document><name>{product_config.get("description", "Overview")} Overview</name>\n')
+            kml.write(f'<Document><name>{date_str} {product_config.get("description", "Overview")}</name>\n')
             
             # Style Definition
             kml.write('<Style id="image_style">\n')
             kml.write('<IconStyle>\n')
-            kml.write(f'<scale>{product_config.get("icon_scale", 1.0)}</scale>\n')
-            icon_url = product_config.get("icon_url", "http://maps.google.com/mapfiles/kml/shapes/camera.png")
+            kml.write(f'<scale>{product_config.get("icon_scale", 0.75)}</scale>\n')
+            icon_url = product_config.get("icon_url", "https://map.geo.admin.ch/api/icons/sets/default/icons/100-camera@1x-127,0,255.png")
             kml.write(f'<Icon><href>{icon_url}</href><gx:w>48</gx:w><gx:h>48</gx:h></Icon>\n')
             kml.write('</IconStyle>\n')
             kml.write('<LabelStyle>\n')
@@ -130,17 +131,22 @@ def generate_kml_from_stac_items(
             count = 0
             for item in items:
                 if item['lat'] is None or item['lon'] is None:
-                    continue
-                
+                    continue               
                 count += 1
+                
                 kml.write('<Placemark>\n')
-                kml.write(f'<name>{item["item_id"]}</name>\n')
-                kml.write(f'<description><![CDATA[')
+                kml.write('<name></name>\n')  # Empty name as per target format
+                kml.write('<description><![CDATA[')
+                
                 if item["asset_url"]:
-                    kml.write(f'<a href="{item["asset_url"]}">Download Fullresolution</a><br>')
-                kml.write(f'Timestamp: {item["timestamp"]}<br>')
-                if item['thumbnail_url']:
-                    kml.write(f'<img style="max-width:400px;" src="{item["thumbnail_url"]}">')
+                    kml.write(f'<a href="{item["asset_url"]}">Download-View Fullresolution</a> ')
+                
+                # Add timestamp (format: 2025:05:30 08:09:36)
+                kml.write(f'{item["timestamp"]}')
+                
+                if item.get('thumbnail_url'):
+                    kml.write(f'<br><img style="max-width:400px;" src="{item["thumbnail_url"]}">')
+                
                 kml.write(']]></description>\n')
                 kml.write('<styleUrl>#image_style</styleUrl>\n')
                 kml.write('<Point>\n')

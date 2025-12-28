@@ -60,6 +60,61 @@ def generate_csv_from_photos(
         print(f"✗ CSV creation failed: {e}")
         return False
 
+def parse_exif_timestamp(exif_timestamp: Optional[str], photo_name: str) -> str:
+    """
+    Parsed EXIF-Timestamp zu Item-Timestamp.
+    Fallback auf Dateinamen oder aktuelles Datum wenn EXIF fehlt.
+    
+    Args:
+        exif_timestamp: EXIF Timestamp (z.B. "2024:06:30 13:59:15")
+        photo_name: Dateiname (für Fallback)
+        
+    Returns:
+        str: Timestamp im Format "YYYY-MM-DDthhmmss"
+    """
+    # Wenn EXIF vorhanden, parse es
+    if exif_timestamp:
+        try:
+            dt = datetime.strptime(exif_timestamp, "%Y:%m:%d %H:%M:%S")
+            return dt.strftime("%Y-%m-%dt%H%M%S").lower()
+        except (ValueError, TypeError) as e:
+            logger.warning(f"  ⚠ EXIF-Timestamp ungültig: {exif_timestamp}, Fehler: {e}")
+    
+    # Fallback 1: Versuche aus Dateinamen zu extrahieren
+    # Beispiel: IMG_20240630_135915.jpg oder 2024-06-30_135915.jpg
+    try:
+        # Pattern: YYYYMMDD_HHMMSS oder YYYY-MM-DD_HHMMSS
+        import re
+        
+        # Pattern 1: IMG_20240630_135915 oder _20240630_135915
+        match = re.search(r'(\d{8})_(\d{6})', photo_name)
+        if match:
+            date_str = match.group(1)  # 20240630
+            time_str = match.group(2)  # 135915
+            
+            dt = datetime.strptime(date_str + time_str, "%Y%m%d%H%M%S")
+            logger.info(f"  ℹ Timestamp aus Dateinamen: {dt.strftime('%Y-%m-%d %H:%M:%S')}")
+            return dt.strftime("%Y-%m-%dt%H%M%S").lower()
+        
+        # Pattern 2: 2024-06-30_135915
+        match = re.search(r'(\d{4}-\d{2}-\d{2})_(\d{6})', photo_name)
+        if match:
+            date_str = match.group(1).replace('-', '')  # 20240630
+            time_str = match.group(2)  # 135915
+            
+            dt = datetime.strptime(date_str + time_str, "%Y%m%d%H%M%S")
+            logger.info(f"  ℹ Timestamp aus Dateinamen: {dt.strftime('%Y-%m-%d %H:%M:%S')}")
+            return dt.strftime("%Y-%m-%dt%H%M%S").lower()
+            
+    except Exception as e:
+        logger.debug(f"  Konnte Timestamp nicht aus Dateinamen extrahieren: {e}")
+    
+    # Fallback 2: Verwende aktuelles Datum + laufende Nummer
+    # WARNUNG: Dies ist nicht ideal, aber besser als Crash
+    logger.warning(f"  ⚠ Kein Timestamp gefunden - verwende aktuelles Datum")
+    dt = datetime.now()
+    return dt.strftime("%Y-%m-%dt%H%M%S").lower()
+
 def dms_to_decimal(degrees: float, minutes: float, seconds: float, direction: str) -> float:
     """
     Konvertiert DMS (Degrees Minutes Seconds) zu Dezimal-Koordinaten.
@@ -85,6 +140,7 @@ def dms_to_decimal(degrees: float, minutes: float, seconds: float, direction: st
 def extract_exif_data(file_path: Path) -> Tuple[Optional[float], Optional[float], Optional[str]]:
     """
     Extrahiert EXIF-Daten aus JPEG-Datei mittels gdalinfo subprocess.
+    Rückwärtskompatibel mit älteren GDAL-Versionen.
     
     Args:
         file_path (Path): Pfad zur JPEG-Datei
@@ -93,52 +149,144 @@ def extract_exif_data(file_path: Path) -> Tuple[Optional[float], Optional[float]
         Tuple: (latitude, longitude, timestamp) oder (None, None, None) bei Fehler
     """
     try:
-        # Unterdrücke Ausgaben mit devnull
+        # ====================================================================
+        # METHODE 1: Versuche JSON (schneller, neues GDAL)
+        # ====================================================================
+        try:
+            with open(os.devnull, 'w') as devnull:
+                result = subprocess.run(
+                    ['gdalinfo', '-json', str(file_path)],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,  # Reduziert von 10 auf 5 Sekunden
+                    env={**os.environ, 'GDAL_PAM_ENABLED': 'NO'}
+                )
+            
+            if result.returncode == 0:
+                exif_data = json.loads(result.stdout)
+                
+                lat, lon, timestamp = None, None, None
+                
+                if 'metadata' in exif_data and '' in exif_data['metadata']:
+                    exif = exif_data['metadata']['']
+                    
+                    # GPS-Daten extrahieren
+                    if 'EXIF_GPSLatitude' in exif and 'EXIF_GPSLongitude' in exif:
+                        lat_parts = exif['EXIF_GPSLatitude']
+                        lon_parts = exif['EXIF_GPSLongitude']
+                        lat_ref = exif.get('EXIF_GPSLatitudeRef', 'N')
+                        lon_ref = exif.get('EXIF_GPSLongitudeRef', 'E')
+                        
+                        # Parse DMS-Format: "(DD) (MM) (SS.SS)"
+                        try:
+                            lat_vals = [float(x.replace(')', '')) for x in lat_parts.strip('()').split(') (')]
+                            lon_vals = [float(x.replace(')', '')) for x in lon_parts.strip('()').split(') (')]
+                            
+                            lat = dms_to_decimal(lat_vals[0], lat_vals[1], lat_vals[2], lat_ref)
+                            lon = dms_to_decimal(lon_vals[0], lon_vals[1], lon_vals[2], lon_ref)
+                        except (ValueError, IndexError):
+                            lat, lon = None, None
+                    
+                    # Zeitstempel extrahieren
+                    if 'EXIF_DateTimeOriginal' in exif:
+                        timestamp = exif['EXIF_DateTimeOriginal']
+                
+                # Wenn erfolgreich, return
+                if lat or lon or timestamp:
+                    return lat, lon, timestamp
+        
+        except (subprocess.TimeoutExpired, json.JSONDecodeError, Exception):
+            # Fallback zu Text-Parsing
+            pass
+        
+        # ====================================================================
+        # METHODE 2: Text-Parsing (langsamer, aber kompatibel mit altem GDAL)
+        # ====================================================================
+        logger.debug(f"  Fallback zu Text-Parsing für {file_path.name}")
+        
         with open(os.devnull, 'w') as devnull:
             result = subprocess.run(
-                ['gdalinfo', '-json', str(file_path)],
+                ['gdalinfo', str(file_path)],
                 capture_output=True,
                 text=True,
-                timeout=10,
+                timeout=30,  # Längerer Timeout für Text-Parsing
                 env={**os.environ, 'GDAL_PAM_ENABLED': 'NO'}
             )
         
         if result.returncode != 0:
             return None, None, None
         
-        exif_data = json.loads(result.stdout)
-        
-        lat, lon, timestamp = None, None, None
-        
-        if 'metadata' in exif_data and '' in exif_data['metadata']:
-            exif = exif_data['metadata']['']
-            
-            # GPS-Daten extrahieren
-            if 'EXIF_GPSLatitude' in exif and 'EXIF_GPSLongitude' in exif:
-                lat_parts = exif['EXIF_GPSLatitude']
-                lon_parts = exif['EXIF_GPSLongitude']
-                lat_ref = exif.get('EXIF_GPSLatitudeRef', 'N')
-                lon_ref = exif.get('EXIF_GPSLongitudeRef', 'E')
-                
-                # Parse DMS-Format: "(DD) (MM) (SS.SS)"
-                try:
-                    lat_vals = [float(x.replace(')', '')) for x in lat_parts.strip('()').split(') (')]
-                    lon_vals = [float(x.replace(')', '')) for x in lon_parts.strip('()').split(') (')]
-                    
-                    lat = dms_to_decimal(lat_vals[0], lat_vals[1], lat_vals[2], lat_ref)
-                    lon = dms_to_decimal(lon_vals[0], lon_vals[1], lon_vals[2], lon_ref)
-                except (ValueError, IndexError):
-                    lat, lon = None, None
-            
-            # Zeitstempel extrahieren
-            if 'EXIF_DateTimeOriginal' in exif:
-                timestamp = exif['EXIF_DateTimeOriginal']
-        
+        # Parse Text-Output
+        lat, lon, timestamp = parse_gdalinfo_text(result.stdout)
         return lat, lon, timestamp
         
+    except subprocess.TimeoutExpired:
+        logger.warning(f"  ⚠ Timeout beim EXIF-Lesen von {file_path.name}")
+        return None, None, None
     except Exception as e:
         logger.warning(f"  ⚠ Fehler beim EXIF-Lesen von {file_path.name}: {e}")
         return None, None, None
+
+
+def parse_gdalinfo_text(output: str) -> Tuple[Optional[float], Optional[float], Optional[str]]:
+    """
+    Parsed EXIF-Daten aus gdalinfo Text-Output.
+    
+    Args:
+        output (str): gdalinfo Text-Output
+        
+    Returns:
+        Tuple: (latitude, longitude, timestamp)
+    """
+    lat, lon, timestamp = None, None, None
+    
+    lines = output.split('\n')
+    
+    lat_vals = None
+    lon_vals = None
+    lat_ref = 'N'
+    lon_ref = 'E'
+    
+    for line in lines:
+        line = line.strip()
+        
+        # GPS Latitude: EXIF_GPSLatitude=(46) (16.9519) (0)
+        if 'EXIF_GPSLatitude=' in line and 'Ref' not in line:
+            try:
+                # Extrahiere Werte: "(46) (16.9519) (0)"
+                parts = line.split('=', 1)[1]
+                lat_vals = [float(x.strip('()')) for x in parts.split(') (')]
+            except (ValueError, IndexError):
+                pass
+        
+        # GPS Latitude Ref: EXIF_GPSLatitudeRef=N
+        if 'EXIF_GPSLatitudeRef=' in line:
+            lat_ref = line.split('=', 1)[1].strip()
+        
+        # GPS Longitude: EXIF_GPSLongitude=(8) (39.7803) (0)
+        if 'EXIF_GPSLongitude=' in line and 'Ref' not in line:
+            try:
+                parts = line.split('=', 1)[1]
+                lon_vals = [float(x.strip('()')) for x in parts.split(') (')]
+            except (ValueError, IndexError):
+                pass
+        
+        # GPS Longitude Ref: EXIF_GPSLongitudeRef=E
+        if 'EXIF_GPSLongitudeRef=' in line:
+            lon_ref = line.split('=', 1)[1].strip()
+        
+        # Timestamp: EXIF_DateTimeOriginal=2024:06:30 13:59:15
+        if 'EXIF_DateTimeOriginal=' in line:
+            timestamp = line.split('=', 1)[1].strip()
+    
+    # Konvertiere DMS zu Decimal
+    if lat_vals and len(lat_vals) >= 3:
+        lat = dms_to_decimal(lat_vals[0], lat_vals[1], lat_vals[2], lat_ref)
+    
+    if lon_vals and len(lon_vals) >= 3:
+        lon = dms_to_decimal(lon_vals[0], lon_vals[1], lon_vals[2], lon_ref)
+    
+    return lat, lon, timestamp
 
 
 def resize_image_gdal(
@@ -377,7 +525,8 @@ def process_individual_photos(
                 # ============================================================
                 # Zeitstempel für Item-Name: exif tiemstamp + Index
                 dt = datetime.strptime(exif_timestamp, "%Y:%m:%d %H:%M:%S")
-                timestamp = dt.strftime("%Y-%m-%dt%H%M%S").lower()
+                #timestamp = dt.strftime("%Y-%m-%dt%H%M%S").lower() #
+                timestamp = parse_exif_timestamp(exif_timestamp, jpg_file.name)
                 
                 
                 # Item-Name generieren (z.B. "ram-ebn-2024-12-21t123456")

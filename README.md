@@ -69,7 +69,16 @@ sudo apt update
 sudo apt install gdal-bin python3-gdal
 ```
 
-### 2. Python Virtual Environment (empfohlen)
+### .EXE (empfohlen)
+
+#### Windows (OSGeo4W Shell)
+1. Kopiere Secrets Folder und dist/rapidmapping_processor.exe ind das gleiche Verezeichnis
+2. Führe Script in OSGeo4W Shell aus
+```bash
+rapidmapping_processor.exe
+```
+
+### 3. Python Virtual Environment ( 2. Wahl )
 
 #### Mit QGIS Python:
 ```bash
@@ -703,7 +712,7 @@ python util_stac_delete_ram.py
 **⚠️ Vorsicht:** Gelöschte Items können nicht wiederhergestellt werden!
 
 
-## Generate Executable binaries / EXE
+## Generate Executable binaries / EXE  ( for now: WINDOWS only)
 
 The WINDOWS version was created with pyinstaller. [quite a thing](https://stackoverflow.com/questions/56472933/pyinstaller-executable-fails).
 Solution steps
@@ -712,13 +721,36 @@ Solution steps
    ```sh
    pip install pyinstaller
     ```
-2. run pyinstaller 
+
+**One EXE Use the provided .bat creator (recommended)**
+1. Run script
    ```sh
-   pyinstaller --noconfirm --onefile --console --name rapidmapping_processor --add-data "configuration.py;." --add-data "utilities;utilities" --add-data "util_publish_stac_fsdi.py;." --add-data "main_multipart_upload_via_api.py;." --hidden-import=utilities.credentials --hidden-import=utilities.proxy_handler --hidden-import=utilities.file_handler --hidden-import=utilities.mosaic_processor --hidden-import=utilities.photo_processor --hidden-import=utilities.kml_generator --hidden-import=utilities.stac_publisher --hidden-import=rasterio --hidden-import=rasterio.serde --hidden-import=rasterio._shim --hidden-import=rasterio.sample --collect-submodules=rasterio rapidmapping_processor.py
+   pyinstaller_onefile.bat
+    ```
+2. Create your secrets folder in the same dir
+  - `proxy_config.json`
+  - `stac_credentials.json`
+
+**One DIR Use the provided .bat creator**
+Use this approach if the generated EXE  throws some errors...
+1. Run script
+   ```sh
+   pyinstaller_onefile.bat
+    ```
+2. Create your secrets folder in the same dir
+  - `proxy_config.json`
+  - `stac_credentials.json`
+  
+**Do it  manually**
+If the above fails 
+
+1. run pyinstaller 
+   ```sh
+   pyinstaller --noconfirm --onedir --console --noupx --name rapidmapping_processor --add-data "configuration.py;." --add-data "utilities;utilities" --add-data "util_publish_stac_fsdi.py;." --add-data "main_multipart_upload_via_api.py;." --hidden-import=utilities.credentials --hidden-import=utilities.proxy_handler --hidden-import=utilities.file_handler --hidden-import=utilities.mosaic_processor --hidden-import=utilities.photo_processor --hidden-import=utilities.kml_generator --hidden-import=utilities.stac_publisher --hidden-import=rasterio.serde --hidden-import=rasterio._shim --hidden-import=rasterio.sample --collect-submodules=rasterio rapidmapping_processor.py
    ```
   
 
-3. Create your secrets folder in the same dir
+2. Create your secrets folder in the same dir
   - `proxy_config.json`
   - `stac_credentials.json`
 

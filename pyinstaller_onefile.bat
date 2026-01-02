@@ -1,12 +1,12 @@
 @echo off
 REM ========================================================================
-REM Rapid Mapping Processor - Complete Cleanup and Rebuild Script
+REM Rapid Mapping Processor - Single EXE Builder
 REM ========================================================================
 chcp 65001 >nul
 
 echo.
 echo ========================================================================
-echo   RAPID MAPPING PROCESSOR - CLEANUP AND REBUILD (ONEDIR)
+echo   RAPID MAPPING PROCESSOR - SINGLE EXE BUILD
 echo ========================================================================
 echo.
 
@@ -133,16 +133,16 @@ echo   ✓ rasterio verfügbar
 echo.
 
 REM ========================================================================
-REM SCHRITT 3: REBUILD MIT --onedir (KEINE KOMPRESSION)
+REM SCHRITT 3: BUILD MIT --onefile (EINZELNE EXE)
 REM ========================================================================
-echo [3/5] Building EXE (--onedir, ohne Kompression)...
+echo [3/5] Building Single EXE (--onefile)...
 echo.
-echo   INFO: Verwende --onedir statt --onefile
-echo         Dies vermeidet Dekomprimierungs-Probleme mit DLLs
-echo         Resultat: Ordner mit EXE + DLLs statt einzelner EXE
+echo   INFO: Verwende --onefile für eine einzelne EXE-Datei
+echo         Resultat: Eine einzige rapidmapping_processor.exe
 echo.
 
-pyinstaller --noconfirm --onedir --console ^
+pyinstaller --noconfirm --console ^
+    --onefile ^
     --noupx ^
     --name rapidmapping_processor ^
     --add-data "configuration.py;." ^
@@ -192,25 +192,27 @@ REM ========================================================================
 echo [4/5] Prüfe Output...
 echo.
 
-if not exist "dist\rapidmapping_processor\rapidmapping_processor.exe" (
+if not exist "dist\rapidmapping_processor.exe" (
     echo   ✗ EXE nicht gefunden!
-    echo   Erwarteter Pfad: dist\rapidmapping_processor\rapidmapping_processor.exe
+    echo   Erwarteter Pfad: dist\rapidmapping_processor.exe
     pause
     exit /b 1
 )
 
-echo   ✓ EXE gefunden: dist\rapidmapping_processor\rapidmapping_processor.exe
+echo   ✓ EXE gefunden: dist\rapidmapping_processor.exe
 echo.
 
-REM Zeige Verzeichnis-Inhalt
-echo   Verzeichnis-Inhalt (Auswahl):
-dir /b dist\rapidmapping_processor | findstr /r "rapidmapping.*\.exe$ .*\.dll$" | more
-echo   ... und weitere Dateien
+REM Zeige Dateigröße
+for %%A in (dist\rapidmapping_processor.exe) do (
+    set size=%%~zA
+    set /a size_mb=%%~zA/1048576
+)
+echo   Dateigröße: %size_mb% MB
 echo.
 
-REM Zähle Dateien
-for /f %%A in ('dir /b /a-d "dist\rapidmapping_processor\*" ^| find /c /v ""') do set file_count=%%A
-echo   Gesamt: %file_count% Dateien im Verzeichnis
+REM Prüfe ob wirklich nur eine EXE existiert
+echo   Inhalt von dist\:
+dir /b dist\
 echo.
 
 REM ========================================================================
@@ -219,19 +221,15 @@ REM ========================================================================
 echo [5/5] Teste EXE...
 echo.
 
-cd dist\rapidmapping_processor
-
-REM Test 1: Einfacher Start-Test
-echo   Test 1: EXE startet...
-rapidmapping_processor.exe --help >nul 2>&1
+echo   Test: EXE startet...
+dist\rapidmapping_processor.exe --help >nul 2>&1
 if %errorlevel% equ 0 (
     echo   ✓ EXE läuft erfolgreich!
 ) else (
     echo   ⚠ EXE hat Runtime-Probleme
-    echo   Versuche manuellen Test: dist\rapidmapping_processor\rapidmapping_processor.exe --help
+    echo   Versuche manuellen Test: dist\rapidmapping_processor.exe --help
 )
 
-cd ..\..
 echo.
 
 REM ========================================================================
@@ -242,49 +240,30 @@ echo   ✓ BUILD ABGESCHLOSSEN
 echo ========================================================================
 echo.
 echo EXE Location:
-echo   %CD%\dist\rapidmapping_processor\rapidmapping_processor.exe
+echo   %CD%\dist\rapidmapping_processor.exe
 echo.
-echo WICHTIG - ONEDIR MODUS:
-echo   Die EXE ist jetzt in einem Ordner mit allen Dependencies.
-echo   Verteile den GANZEN ORDNER: dist\rapidmapping_processor\
+echo WICHTIG - SINGLE EXE:
+echo   Die EXE ist eine eigenständige Datei - keine zusätzlichen Ordner nötig.
+echo   Bei Start entpackt PyInstaller temporär in %TEMP%
 echo.
 echo Nächste Schritte:
-echo   1. Erstelle secrets\ Verzeichnis in: dist\rapidmapping_processor\
-echo   2. Kopiere stac_credentials.json nach: dist\rapidmapping_processor\secrets\
-echo   3. Teste: dist\rapidmapping_processor\rapidmapping_processor.exe
+echo   1. Erstelle secrets\ Verzeichnis neben der EXE
+echo   2. Kopiere stac_credentials.json nach secrets\
+echo   3. Teste: dist\rapidmapping_processor.exe
 echo.
 echo Für Distribution:
-echo   1. ZIP erstellen: rapidmapping_processor.zip (kompletter Ordner)
-echo   2. User extrahiert ZIP
-echo   3. User startet rapidmapping_processor\rapidmapping_processor.exe
+echo   - Einfach rapidmapping_processor.exe verteilen
+echo   - User muss secrets\ Verzeichnis mit Credentials erstellen
+echo.
+echo HINWEIS - STARTZEIT:
+echo   Erste Start kann 5-10 Sekunden dauern (Entpacken)
+echo   Weitere Starts sind schneller (Cache)
 echo.
 echo Bei Problemen:
 echo   - Prüfe Log: build\rapidmapping_processor\warn-rapidmapping_processor.txt
-echo   - Alle DLLs sind jetzt sichtbar im Verzeichnis
+echo   - Wenn DLL-Fehler: Versuche --onedir Modus (anderes Skript)
 echo.
 echo ========================================================================
 echo.
 
 pause
-```
-
-## 📦 Was ändert sich mit `--onedir`?
-
-### Vorher (`--onefile`):
-```
-dist/
-└── rapidmapping_processor.exe  (80-100 MB, komprimiert)
-```
-
-### Nachher (`--onedir`):
-```
-dist/
-└── rapidmapping_processor/
-    ├── rapidmapping_processor.exe  (~500 KB)
-    ├── python312.dll
-    ├── libssl-3-x64.dll
-    ├── libcrypto-3-x64.dll
-    ├── hdf5-xxx.dll
-    ├── ... (viele weitere DLLs)
-    ├── base_library.zip
-    └── ... (~150-200 Dateien, ~100-150 MB gesamt)

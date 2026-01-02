@@ -18,10 +18,10 @@ def query_stac_items_by_date(
     collection: str,
     date: str,
     product_suffix: str
-) -> List[Dict]:
+    ) -> List[Dict]:
     """
     Queries STAC for all items of a specific date and product using pure requests.
-    Replaces pystac-client to avoid sqlite3/DLL issues.
+    Handles pagination to retrieve all results.
     """
     try:
         session = get_session()
@@ -35,59 +35,94 @@ def query_stac_items_by_date(
         payload = {
             "collections": [collection],
             "datetime": f"{date}T00:00:00Z/{date}T23:59:59Z",
-            "limit": 500  # Increased limit to cover a full day in one request
+            "limit": 100  # Use reasonable page size (100 is common)
         }
         
-        # Execute POST request
-        resp = session.post(search_endpoint, json=payload)
-        resp.raise_for_status()
-        data = resp.json()
+        all_results = []
+        page_count = 0
         
-        features = data.get("features", [])
-        results = []
-        
-        for feature in features:
-            item_id = feature["id"]
+        # Pagination loop
+        while True:
+            page_count += 1
+            logger.info(f"  Fetching page {page_count}...")
             
-            # Filter Logic
-            if product_suffix not in item_id or 'overview' in item_id:
-                continue
+            # Execute POST request
+            resp = session.post(search_endpoint, json=payload)
+            resp.raise_for_status()
+            data = resp.json()
             
-            assets = feature.get("assets", {})
-            props = feature.get("properties", {})
-            geometry = feature.get("geometry", {})
+            features = data.get("features", [])
             
-            # Extract Asset URL
-            asset_url = None
-            thumbnail_url = None
+            # Process features from this page
+            for feature in features:
+                item_id = feature["id"]
+                
+                # Filter Logic
+                if product_suffix not in item_id or 'overview' in item_id:
+                    continue
+                
+                assets = feature.get("assets", {})
+                props = feature.get("properties", {})
+                geometry = feature.get("geometry", {})
+                
+                # Extract Asset URL
+                asset_url = None
+                thumbnail_url = None
+                
+                for asset_key, asset_val in assets.items():
+                    href = asset_val.get("href")
+                    if asset_key == 'thumbnail.jpg':
+                        thumbnail_url = href
+                    elif product_suffix in asset_key and asset_key.endswith(('.jpg', '.jpeg')):
+                        asset_url = href
+                
+                # Extract Geometry (Lat/Lon)
+                lat, lon = None, None
+                if geometry and geometry.get('type') == 'Point':
+                    coords = geometry.get('coordinates', [])
+                    if len(coords) >= 2:
+                        lon, lat = coords[0], coords[1]
+                        
+                timestamp = props.get('datetime', '')
+                
+                all_results.append({
+                    'item_id': item_id,
+                    'asset_url': asset_url,
+                    'thumbnail_url': thumbnail_url,
+                    'lat': lat,
+                    'lon': lon,
+                    'timestamp': timestamp
+                })
             
-            for asset_key, asset_val in assets.items():
-                href = asset_val.get("href")
-                if asset_key == 'thumbnail.jpg':
-                    thumbnail_url = href
-                elif product_suffix in asset_key and asset_key.endswith(('.jpg', '.jpeg')):
-                    asset_url = href
+            # Check for next page
+            links = data.get("links", [])
+            next_link = None
             
-            # Extract Geometry (Lat/Lon)
-            lat, lon = None, None
-            if geometry and geometry.get('type') == 'Point':
-                coords = geometry.get('coordinates', [])
-                if len(coords) >= 2:
-                    lon, lat = coords[0], coords[1]
-                    
-            timestamp = props.get('datetime', '')
+            for link in links:
+                if link.get("rel") == "next":
+                    next_link = link.get("href")
+                    # Some APIs use "body" or "method": "POST" with a request body
+                    next_body = link.get("body")
+                    if next_body:
+                        payload = next_body
+                    elif link.get("method") == "GET":
+                        # Switch to GET request if specified
+                        search_endpoint = next_link
+                        payload = None
+                    break
             
-            results.append({
-                'item_id': item_id,
-                'asset_url': asset_url,
-                'thumbnail_url': thumbnail_url,
-                'lat': lat,
-                'lon': lon,
-                'timestamp': timestamp
-            })
+            # Exit loop if no more pages
+            if not next_link:
+                logger.info(f"  No more pages (fetched {page_count} pages total)")
+                break
+            
+            # Optional: Safety limit to prevent infinite loops
+            if page_count > 1000:
+                logger.warning(f"  Reached safety limit of 1000 pages, stopping")
+                break
 
-        logger.info(f"  ✓ {len(results)} Items found")
-        return results
+        logger.info(f"  ✓ {len(all_results)} Items found across {page_count} pages")
+        return all_results
 
     except Exception as e:
         logger.error(f"  ✗ STAC query failed: {e}")

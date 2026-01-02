@@ -59,7 +59,7 @@ def print_banner():
     """Print application banner."""
     print("=" * 70)
     print(" " * 12 + "SWISSTOPO RAPID MAPPING PROCESSOR v2.0")
-    print(" " * 18 + "(subprocess version)")
+    print(" " * 18 + "(POC - not for operational use)")
     print("=" * 70)
     print()
 

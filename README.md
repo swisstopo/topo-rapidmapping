@@ -740,6 +740,8 @@ Use this approach if the generated EXE  throws some errors...
 2. Create your secrets folder in the same dir
   - `proxy_config.json`
   - `stac_credentials.json`
+
+3. The generated EXE must be *signed* by the IT department (ask Urs B.).
   
 **Do it  manually**
 If the above fails 
@@ -753,6 +755,8 @@ If the above fails
 2. Create your secrets folder in the same dir
   - `proxy_config.json`
   - `stac_credentials.json`
+
+3. The generated EXE must be *signed* by the IT department (ask Urs B.). 
 
 ## 📞 Support
 

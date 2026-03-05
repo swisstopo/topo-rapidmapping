@@ -63,36 +63,44 @@ def load_credentials_from_file(config_path: str) -> tuple:
 
 
 def get_collection_items(base_url: str, collection_id: str, auth: tuple) -> List[Dict]:
-    """
-    Get all items from a collection using STAC API
-    
-    Args:
-        base_url (str): Base URL of the STAC API
-        collection_id (str): Collection ID
-        auth (tuple): Authentication credentials
-        
-    Returns:
-        List[Dict]: List of items
-    """
+    """ Holt ALLE Items einer Collection unter Berücksichtigung der Paginierung """
+    all_items = []
     items_url = urljoin(base_url, f"collections/{collection_id}/items")
     
-    try:
-        if PROXY_AVAILABLE:
-            session = get_session()
-            response = session.get(items_url, auth=auth, params={"limit": 1000}, timeout=(30, 60))
-        else:
-            response = requests.get(items_url, auth=auth, params={"limit": 1000}, timeout=(30, 60))
-        
-        response.raise_for_status()
-        data = response.json()
-        return data.get('features', [])
-    except requests.exceptions.Timeout as e:
-        logging.error(f"Timeout fetching items from collection {collection_id}: {str(e)}")
-        logging.error("Try increasing timeout or check network connection")
-        raise
-    except Exception as e:
-        logging.error(f"Error fetching items from collection {collection_id}: {str(e)}")
-        raise
+    # Start-Parameter
+    params = {"limit": 1000}
+    
+    while items_url:
+        try:
+            if PROXY_AVAILABLE:
+                session = get_session()
+                response = session.get(items_url, auth=auth, params=params, timeout=(30, 60))
+            else:
+                response = requests.get(items_url, auth=auth, params=params, timeout=(30, 60))
+            
+            response.raise_for_status()
+            data = response.json()
+            
+            # Features zur Liste hinzufügen
+            features = data.get('features', [])
+            all_items.extend(features)
+            
+            # Paginierung: Suche nach dem 'next' Link
+            next_link = next((link for link in data.get('links', []) if link.get('rel') == 'next'), None)
+            
+            if next_link:
+                items_url = next_link.get('href')
+                # Bei Folgerequests sind die Parameter oft schon in der URL enthalten
+                params = None 
+                logging.info(f"Lade nächste Seite... (Bisher gefunden: {len(all_items)})")
+            else:
+                items_url = None
+                
+        except Exception as e:
+            logging.error(f"Fehler beim Abrufen der Items: {str(e)}")
+            raise
+
+    return all_items
 
 
 def filter_ram_items(items: List[Dict], date_filter: Optional[str] = None) -> List[Dict]:

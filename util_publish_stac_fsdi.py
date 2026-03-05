@@ -234,6 +234,8 @@ def asset_create_json_payload(id, asset_type, current, asset_title=None):
         payload = {"id": id_no_path, "title": title, "type": "application/vnd.google-earth.kml+xml"}
     elif asset_type == "JSON":
         payload = {"id": id_no_path, "title": title, "type": "application/json"}
+    elif asset_type == "TXT":
+        payload = {"id": id_no_path, "title": title, "type": "text/plain"}
     elif asset_type == "GEOJSON":
         payload = {"id": id_no_path, "title": title, "type": "application/geo+json"}
     elif asset_type == "CSV":
@@ -341,6 +343,7 @@ def publish_to_stac(username, password, asset, item_name, collection, geocat_id,
         extension = asset.split('.')[-1].lower()
         asset_type_map = {
             'csv': 'CSV',
+            'txt': 'TXT',
             'json': 'JSON',
             'jpg': 'JPEG',
             'kml': 'KML',

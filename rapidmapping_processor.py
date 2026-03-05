@@ -40,7 +40,7 @@ from utilities.file_handler import (
     cleanup_temp_directory
 )
 from utilities.mosaic_processor import process_single_cog_file
-from utilities.photo_processor import process_individual_photos,generate_csv_from_stac
+from utilities.photo_processor import process_individual_photos, generate_csv_from_stac
 from utilities.kml_generator import create_overview_kml
 from utilities.stac_publisher import publish_to_stac_wrapper
 from utilities.proxy_handler import initialize_proxy
@@ -247,7 +247,7 @@ def process_photos_workflow(
     environment,
     hostname
 ):
-    """Workflow für Einzelbilder mit Upload, CSV (aus STAC) und KML-Overview."""
+    """Workflow für Einzelbilder: Upload → KML → CSV (beide im Overview-Item)."""
     try:
         import logging
         from pathlib import Path
@@ -264,13 +264,17 @@ def process_photos_workflow(
         temp_dir = Path("temp")
         temp_dir.mkdir(exist_ok=True)
 
-        config = get_product_config(product_type)
+        config         = get_product_config(product_type)
+        product_suffix = config['suffix'].replace('-mosaic', '').replace('-photo', '')
+        stac_url       = f"{STAC_SCHEME}://{hostname}{STAC_API_PATH}"
 
         logger.info("=" * 70)
         logger.info("INDIVIDUAL PHOTOS PROCESSING")
         logger.info("=" * 70)
 
+        # ----------------------------------------------------------------
         # Photos verarbeiten (EXIF + Thumbnails + Upload)
+        # ----------------------------------------------------------------
         result = process_individual_photos(
             input_dir=input_dir,
             output_dir=temp_dir,
@@ -287,40 +291,25 @@ def process_photos_workflow(
             logger.error("✗ Photo-Verarbeitung fehlgeschlagen")
             return False
 
-        # ----------------------------------------------------------------
-        # CSV aus STAC generieren (nicht aus lokaler Liste)
-        # ----------------------------------------------------------------
-        product_suffix = config['suffix'].replace('-mosaic', '').replace('-photo', '')
-        stac_url = f"{STAC_SCHEME}://{hostname}{STAC_API_PATH}"
-
-        csv_file = Path(f"{date}-{product_type.value}.txt")
-
-        if upload_enabled:
-            generate_csv_from_stac(
-                stac_url=stac_url,
-                collection=STAC_COLLECTION,
-                date=date,
-                product_suffix=product_suffix,
-                output_file=csv_file
-            )
-        else:
-            logger.info("ℹ Upload deaktiviert – CSV-Generierung aus STAC übersprungen")
-
-        # ----------------------------------------------------------------
-        # KML-Overview generieren (via STAC-Abfrage)
-        # ----------------------------------------------------------------
-        kml_item_name = None
+        kml_item_name  = None
         kml_asset_name = None
+        csv_file       = None
 
         if result['successful_uploads'] > 0:
+
+            # ----------------------------------------------------------------
+            # KML-Overview generieren und hochladen.
+            # Dieser Schritt legt das Overview-Item im STAC an — der CSV-Upload
+            # danach fügt sich als zweites Asset in dasselbe Item ein.
+            # ----------------------------------------------------------------
             logger.info("\n" + "=" * 70)
             logger.info("GENERIERE KML-OVERVIEW (via STAC-Abfrage)")
             logger.info("=" * 70)
 
-            kml_timestamp = f"{date}t235959"
-            kml_item_name = generate_item_name(kml_timestamp, product_type) + "-overview"
+            kml_timestamp  = f"{date}t235959"
+            kml_item_name  = generate_item_name(kml_timestamp, product_type) + "-overview"
             kml_asset_name = kml_item_name + ".kml"
-            kml_file = temp_dir / kml_asset_name
+            kml_file       = temp_dir / kml_asset_name
 
             kml_success = create_overview_kml(
                 stac_url=stac_url,
@@ -332,7 +321,7 @@ def process_photos_workflow(
             )
 
             if kml_success:
-                logger.info(f"\n→ Upload KML-Overview als: {kml_asset_name}")
+                logger.info(f"\n-> Upload KML-Overview als: {kml_asset_name}")
                 publish_to_stac_wrapper(
                     asset_path=kml_file,
                     item_name=kml_item_name,
@@ -343,25 +332,71 @@ def process_photos_workflow(
                     environment=environment
                 )
 
+            # ----------------------------------------------------------------
+            # CSV aus STAC generieren und hochladen.
+            #
+            # Asset-Name analog KML (gleicher Basis-Name, andere Extension):
+            #   KML: ram-2025-07-10t235959-ebn-photo-overview.kml
+            #   TXT: ram-2025-07-10t235959-ebn-photo-overview.txt
+            #
+            # util_publish_stac_fsdi.py erkennt .txt jetzt als asset_type "TXT"
+            # und ruft rasterio.open() NICHT auf → publish_to_stac_wrapper reicht.
+            # ----------------------------------------------------------------
+            if upload_enabled:
+                logger.info("\n" + "=" * 70)
+                logger.info("GENERIERE CSV AUS STAC")
+                logger.info("=" * 70)
+
+                csv_asset_name = kml_item_name + ".txt"
+                csv_file       = temp_dir / csv_asset_name
+
+                csv_ok = generate_csv_from_stac(
+                    stac_url=stac_url,
+                    collection=STAC_COLLECTION,
+                    date=date,
+                    product_suffix=product_suffix,
+                    output_file=csv_file
+                )
+
+                if csv_ok and csv_file.exists():
+                    logger.info(f"\n-> Upload TXT als: {csv_asset_name} -> Item: {kml_item_name}")
+                    publish_to_stac_wrapper(
+                        asset_path=csv_file,
+                        item_name=kml_item_name,
+                        collection=STAC_COLLECTION,
+                        geocat_id=GEOCAT_ID,
+                        hostname=hostname,
+                        asset_title=f"{config['asset_title']}-LISTE",
+                        environment=environment
+                    )
+
+        elif not upload_enabled:
+            logger.info("i Upload deaktiviert - KML/CSV-Generierung uebersprungen")
+
+        # ----------------------------------------------------------------
         # Cleanup + CMS-Ausgabe
+        # ----------------------------------------------------------------
         photos = result['photos']
         if result['successful_uploads'] == len(photos):
             from utilities.file_handler import cleanup_temp_directory
             cleanup_temp_directory(temp_dir)
 
             if kml_item_name:
+                csv_stac_url = (
+                    f"{STAC_SCHEME}://{hostname}/{STAC_COLLECTION}"
+                    f"/{kml_item_name}/{kml_item_name}.txt"
+                )
                 logger.info("\n" + "=" * 70)
-                logger.info(f"Nächster Schritt für {config['description']}: URL für rapidmapping.ch")
-                logger.info(f"1) URL öffnen: https://map.geo.admin.ch/#/map?layers=KML|{STAC_SCHEME}://{hostname}/{STAC_COLLECTION}/{kml_item_name}/{kml_asset_name}")
-                logger.info(f"2) Kartenausschnitt: als iFrame in rapidmapping.ch integrieren")
-                logger.info(f"3) Downloadliste: {csv_file.name}")
+                logger.info(f"Naechster Schritt fuer {config['description']}")
+                logger.info(f"1) Karte: https://map.geo.admin.ch/#/map?layers=KML|{STAC_SCHEME}://{hostname}/{STAC_COLLECTION}/{kml_item_name}/{kml_asset_name}")
+                logger.info(f"2) Downloadliste (STAC): {csv_stac_url}")
                 logger.info("=" * 70)
 
         return result['successful_uploads'] > 0
 
     except Exception as e:
         import logging, traceback
-        logging.getLogger(__name__).error(f"✗ Fehler im Photos-Workflow: {str(e)}")
+        logging.getLogger(__name__).error(f"Fehler im Photos-Workflow: {str(e)}")
         logging.getLogger(__name__).error(traceback.format_exc())
         return False
 

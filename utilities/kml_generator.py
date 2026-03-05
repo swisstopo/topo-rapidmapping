@@ -1,122 +1,118 @@
 """
 KML Generator - Erstellt Overview-KML aus STAC-Items.
 
-Nach Upload aller Photos eines Tages: Abfrage via pystac-client,
+Nach Upload aller Photos eines Tages: Abfrage via requests (kein pystac),
 um alle Photos zu finden und KML zu generieren.
+
+Enthält zusätzlich get_published_photo_urls() als gemeinsame Hilfsfunktion
+für CSV-Export (genutzt von photo_processor.generate_csv_from_stac).
 """
 
 import logging
-import requests
 from pathlib import Path
 from typing import List, Dict, Optional
 from utilities.proxy_handler import get_session
 
 logger = logging.getLogger(__name__)
 
+
 def query_stac_items_by_date(
     stac_url: str,
     collection: str,
     date: str,
     product_suffix: str
-    ) -> List[Dict]:
+) -> List[Dict]:
     """
     Queries STAC for all items of a specific date and product using pure requests.
     Handles pagination to retrieve all results.
+
+    Args:
+        stac_url:       Vollständige STAC-API-URL (endet auf /api/stac/v0.9/)
+        collection:     STAC Collection Name
+        date:           Datum YYYY-MM-DD
+        product_suffix: z.B. "ebn", "ebo" (ohne "-photo"/"-mosaic")
+
+    Returns:
+        List[Dict] mit Keys: item_id, asset_url, thumbnail_url, lat, lon, timestamp
     """
     try:
         session = get_session()
-        # Ensure endpoint ends with /search
         search_endpoint = f"{stac_url.rstrip('/')}/search"
-        
+
         logger.info(f"  Connecting to STAC (Raw Requests): {search_endpoint}")
         logger.info(f"  Searching items for date: {date}, Product: {product_suffix}")
 
-        # STAC Search Body
         payload = {
             "collections": [collection],
             "datetime": f"{date}T00:00:00Z/{date}T23:59:59Z",
-            "limit": 100  # Use reasonable page size (100 is common)
+            "limit": 100
         }
-        
+
         all_results = []
         page_count = 0
-        
-        # Pagination loop
+
         while True:
             page_count += 1
             logger.info(f"  Fetching page {page_count}...")
-            
-            # Execute POST request
+
             resp = session.post(search_endpoint, json=payload)
             resp.raise_for_status()
             data = resp.json()
-            
-            features = data.get("features", [])
-            
-            # Process features from this page
-            for feature in features:
+
+            for feature in data.get("features", []):
                 item_id = feature["id"]
-                
-                # Filter Logic
+
                 if product_suffix not in item_id or 'overview' in item_id:
                     continue
-                
-                assets = feature.get("assets", {})
-                props = feature.get("properties", {})
+
+                assets   = feature.get("assets", {})
+                props    = feature.get("properties", {})
                 geometry = feature.get("geometry", {})
-                
-                # Extract Asset URL
-                asset_url = None
+
+                asset_url     = None
                 thumbnail_url = None
-                
+
                 for asset_key, asset_val in assets.items():
                     href = asset_val.get("href")
                     if asset_key == 'thumbnail.jpg':
                         thumbnail_url = href
                     elif product_suffix in asset_key and asset_key.endswith(('.jpg', '.jpeg')):
                         asset_url = href
-                
-                # Extract Geometry (Lat/Lon)
+
                 lat, lon = None, None
                 if geometry and geometry.get('type') == 'Point':
                     coords = geometry.get('coordinates', [])
                     if len(coords) >= 2:
                         lon, lat = coords[0], coords[1]
-                        
+
                 timestamp = props.get('datetime', '')
-                
+
                 all_results.append({
-                    'item_id': item_id,
-                    'asset_url': asset_url,
+                    'item_id':       item_id,
+                    'asset_url':     asset_url,
                     'thumbnail_url': thumbnail_url,
-                    'lat': lat,
-                    'lon': lon,
-                    'timestamp': timestamp
+                    'lat':           lat,
+                    'lon':           lon,
+                    'timestamp':     timestamp
                 })
-            
-            # Check for next page
-            links = data.get("links", [])
+
+            # Paginierung
             next_link = None
-            
-            for link in links:
+            for link in data.get("links", []):
                 if link.get("rel") == "next":
                     next_link = link.get("href")
-                    # Some APIs use "body" or "method": "POST" with a request body
                     next_body = link.get("body")
                     if next_body:
                         payload = next_body
                     elif link.get("method") == "GET":
-                        # Switch to GET request if specified
                         search_endpoint = next_link
                         payload = None
                     break
-            
-            # Exit loop if no more pages
+
             if not next_link:
                 logger.info(f"  No more pages (fetched {page_count} pages total)")
                 break
-            
-            # Optional: Safety limit to prevent infinite loops
+
             if page_count > 1000:
                 logger.warning(f"  Reached safety limit of 1000 pages, stopping")
                 break
@@ -126,9 +122,43 @@ def query_stac_items_by_date(
 
     except Exception as e:
         logger.error(f"  ✗ STAC query failed: {e}")
-        # import traceback
-        # logger.error(traceback.format_exc())
         return []
+
+
+def get_published_photo_urls(
+    stac_url: str,
+    collection: str,
+    date: str,
+    product_suffix: str
+) -> List[str]:
+    """
+    Gibt eine geordnete Liste der effektiv publizierten Foto-URLs aus dem STAC.
+
+    Baut auf query_stac_items_by_date() auf und extrahiert daraus nur die
+    Haupt-Asset-URLs (keine Thumbnails, keine KML-Overviews).
+    Primäre Datenquelle für generate_csv_from_stac() in photo_processor.py.
+
+    Args:
+        stac_url:       Vollständige STAC-API-URL
+        collection:     STAC Collection Name
+        date:           Datum YYYY-MM-DD
+        product_suffix: z.B. "ebn", "ebo"
+
+    Returns:
+        Sortierte Liste der Asset-URLs (alphabetisch = chronologisch).
+        Leere Liste bei Fehler oder keinen Resultaten.
+    """
+    items = query_stac_items_by_date(stac_url, collection, date, product_suffix)
+
+    urls = sorted(
+        item['asset_url']
+        for item in items
+        if item.get('asset_url')
+    )
+
+    logger.info(f"  ✓ {len(urls)} publizierte Foto-URLs extrahiert")
+    return urls
+
 
 def generate_kml_from_stac_items(
     items: List[Dict],
@@ -138,10 +168,9 @@ def generate_kml_from_stac_items(
     """
     Generates KML file from the list of item dictionaries.
     """
-    date_str=items[0]['item_id'].split('-', 1)[1][:10]
+    date_str = items[0]['item_id'].split('-', 1)[1][:10]
     try:
         with open(output_file, 'w', encoding='utf-8') as kml:
-            # KML Header
             kml.write('<?xml version="1.0" encoding="UTF-8"?>\n')
             kml.write('<kml\n')
             kml.write('xmlns="http://www.opengis.net/kml/2.2"\n')
@@ -149,55 +178,56 @@ def generate_kml_from_stac_items(
             kml.write('xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"\n')
             kml.write('xsi:schemaLocation="http://www.opengis.net/kml/2.2 https://developers.google.com/kml/schema/kml22gx.xsd">\n')
             kml.write(f'<Document><name>{date_str} {product_config.get("description", "Overview")}</name>\n')
-            
-            # Style Definition
+
             kml.write('<Style id="image_style">\n')
             kml.write('<IconStyle>\n')
             kml.write(f'<scale>{product_config.get("icon_scale", 0.75)}</scale>\n')
-            icon_url = product_config.get("icon_url", "https://map.geo.admin.ch/api/icons/sets/default/icons/100-camera@1x-127,0,255.png")
+            icon_url = product_config.get(
+                "icon_url",
+                "https://map.geo.admin.ch/api/icons/sets/default/icons/100-camera@1x-127,0,255.png"
+            )
             kml.write(f'<Icon><href>{icon_url}</href><gx:w>48</gx:w><gx:h>48</gx:h></Icon>\n')
             kml.write('</IconStyle>\n')
             kml.write('<LabelStyle>\n')
             kml.write('<color>ff0000ff</color><scale>1.5</scale>\n')
             kml.write('</LabelStyle>\n')
             kml.write('</Style>\n')
-            
-            # Placemarks
+
             count = 0
             for item in items:
                 if item['lat'] is None or item['lon'] is None:
-                    continue               
+                    continue
                 count += 1
-                
+
                 kml.write('<Placemark>\n')
-                kml.write('<name></name>\n')  # Empty name as per target format
+                kml.write('<name></name>\n')
                 kml.write('<description><![CDATA[')
-                
+
                 if item["asset_url"]:
                     kml.write(f'<a href="{item["asset_url"]}">Download-View Fullresolution</a> ')
-                
-                # Add timestamp (format: 2025:05:30 08:09:36)
+
                 kml.write(f'{item["timestamp"]}')
-                
+
                 if item.get('thumbnail_url'):
                     kml.write(f'<br><img style="max-width:400px;" src="{item["thumbnail_url"]}">')
-                
+
                 kml.write(']]></description>\n')
                 kml.write('<styleUrl>#image_style</styleUrl>\n')
                 kml.write('<Point>\n')
                 kml.write(f'<coordinates>{item["lon"]},{item["lat"]},0</coordinates>\n')
                 kml.write('</Point>\n')
                 kml.write('</Placemark>\n')
-            
+
             kml.write('</Document>\n')
             kml.write('</kml>\n')
-        
+
         logger.info(f"  ✓ KML created: {output_file} ({count} Placemarks)")
         return True
-        
+
     except Exception as e:
         logger.error(f"  ✗ KML creation failed: {e}")
         return False
+
 
 def create_overview_kml(
     stac_url: str,
@@ -213,18 +243,11 @@ def create_overview_kml(
     logger.info("=" * 70)
     logger.info("KML-OVERVIEW GENERATION")
     logger.info("=" * 70)
-    
-    # Query STAC (using the requests-based function)
-    items = query_stac_items_by_date(
-        stac_url,
-        collection,
-        date,
-        product_suffix
-    )
-    
+
+    items = query_stac_items_by_date(stac_url, collection, date, product_suffix)
+
     if not items:
         logger.warning("  ⚠ No items found - KML not created")
         return False
-    
-    # Generate KML
+
     return generate_kml_from_stac_items(items, output_file, product_config)

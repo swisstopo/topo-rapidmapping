@@ -418,29 +418,59 @@ def convert_tif_files_in_directory(
 # BESTEHENDE FUNKTIONEN (unverändert)
 # ==============================================================================
 
-def generate_csv_from_photos(
-    photos: List[Dict],
+def generate_csv_from_stac(
+    stac_url: str,
+    collection: str,
+    date: str,
+    product_suffix: str,
     output_file: Path,
-    stac_scheme: str = "https",
-    hostname: str = "your-domain.com",
-    stac_collection: str = "your-collection"
 ) -> bool:
     """
-    Generates CSV file with only URLs from the list of photo dictionaries.
-    """
-    try:
-        with open(output_file, 'w', encoding='utf-8') as csvfile:
-            count = 0
-            for photo in photos:
-                url = f"{stac_scheme}://{hostname}/{stac_collection}/{photo['item_name']}/{photo['asset_name']}.jpg"
-                csvfile.write(f"{url}\n")
-                count += 1
+    Erstellt eine CSV-Datei mit den effektiv im STAC publizierten Foto-URLs.
 
-        print(f"✓ CSV created: {output_file} ({count} URLs)")
+    Im Gegensatz zur früheren Variante (lokale photos-Liste) fragt diese
+    Funktion direkt die STAC-API ab — der CSV-Inhalt ist damit garantiert
+    synchron mit dem publizierten Datenstand.
+
+    Keine Thumbnails, keine KML-Overviews, nur Hauptassets (.jpg/.jpeg).
+    URLs werden alphabetisch sortiert ausgegeben (= chronologisch, da der
+    Item-Name den Zeitstempel enthält).
+
+    Args:
+        stac_url (str):        Vollständige STAC-API-URL
+        collection (str):      STAC Collection Name
+        date (str):            Datum im Format YYYY-MM-DD
+        product_suffix (str):  Produkt-Suffix z.B. "ebn", "ebo"
+        output_file (Path):    Pfad zur Ausgabe-Datei
+
+    Returns:
+        bool: True wenn erfolgreich (auch wenn 0 URLs gefunden), False bei I/O-Fehler
+    """
+    from utilities.kml_generator import get_published_photo_urls
+
+    logger.info(f"\n→ Generiere CSV aus STAC-Daten: {output_file.name}")
+
+    urls = get_published_photo_urls(
+        stac_url=stac_url,
+        collection=collection,
+        date=date,
+        product_suffix=product_suffix
+    )
+
+    if not urls:
+        logger.warning("  ⚠ Keine publizierten URLs gefunden – leere CSV wird erstellt")
+
+    try:
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_file, 'w', encoding='utf-8') as f:
+            for url in urls:
+                f.write(f"{url}\n")
+
+        logger.info(f"  ✓ CSV erstellt: {output_file} ({len(urls)} URLs)")
         return True
 
     except Exception as e:
-        print(f"✗ CSV creation failed: {e}")
+        logger.error(f"  ✗ CSV-Erstellung fehlgeschlagen: {e}")
         return False
 
 

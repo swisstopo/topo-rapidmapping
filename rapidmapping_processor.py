@@ -40,7 +40,7 @@ from utilities.file_handler import (
     cleanup_temp_directory
 )
 from utilities.mosaic_processor import process_single_cog_file
-from utilities.photo_processor import process_individual_photos,generate_csv_from_photos
+from utilities.photo_processor import process_individual_photos,generate_csv_from_stac
 from utilities.kml_generator import create_overview_kml
 from utilities.stac_publisher import publish_to_stac_wrapper
 from utilities.proxy_handler import initialize_proxy
@@ -240,65 +240,88 @@ def process_mosaic_workflow(
 
 
 def process_photos_workflow(
-    input_dir: Path,
-    product_type: ProductType,
-    date: str,
-    upload_enabled: bool,
-    environment: str,
-    hostname: str
+    input_dir,
+    product_type,
+    date,
+    upload_enabled,
+    environment,
+    hostname
 ):
-    """Workflow für Einzelbilder mit Upload und KML-Overview."""
+    """Workflow für Einzelbilder mit Upload, CSV (aus STAC) und KML-Overview."""
     try:
+        import logging
+        from pathlib import Path
+        from configuration import (
+            STAC_COLLECTION, GEOCAT_ID, STAC_SCHEME, STAC_API_PATH,
+            get_product_config, generate_item_name
+        )
+        from utilities.photo_processor import process_individual_photos, generate_csv_from_stac
+        from utilities.kml_generator import create_overview_kml
+        from utilities.stac_publisher import publish_to_stac_wrapper
+
+        logger = logging.getLogger(__name__)
+
         temp_dir = Path("temp")
-        temp_dir.mkdir(parents=True, exist_ok=True)
-        
+        temp_dir.mkdir(exist_ok=True)
+
         config = get_product_config(product_type)
-        
+
         logger.info("=" * 70)
         logger.info("INDIVIDUAL PHOTOS PROCESSING")
         logger.info("=" * 70)
-        
-        # Photos verarbeiten (EXIF + Thumbnails)
+
+        # Photos verarbeiten (EXIF + Thumbnails + Upload)
         result = process_individual_photos(
             input_dir=input_dir,
             output_dir=temp_dir,
             product_config=config,
             product_type=product_type,
             stac_collection=STAC_COLLECTION,
-            geocat_id=GEOCAT_ID, 
+            geocat_id=GEOCAT_ID,
             hostname=hostname,
             environment=environment,
             upload_enabled=upload_enabled
         )
-        
+
         if not result:
             logger.error("✗ Photo-Verarbeitung fehlgeschlagen")
             return False
-        
-        # Generiere ein Downloadliste für alle photos
-        photos = result['photos']
-        generate_csv_from_photos(photos,output_file=f"{date}-{product_type.value}.txt",stac_scheme=STAC_SCHEME, hostname=hostname,stac_collection=STAC_COLLECTION)
-        
-              
-            
+
+        # ----------------------------------------------------------------
+        # CSV aus STAC generieren (nicht aus lokaler Liste)
+        # ----------------------------------------------------------------
+        product_suffix = config['suffix'].replace('-mosaic', '').replace('-photo', '')
+        stac_url = f"{STAC_SCHEME}://{hostname}{STAC_API_PATH}"
+
+        csv_file = Path(f"{date}-{product_type.value}.txt")
+
+        if upload_enabled:
+            generate_csv_from_stac(
+                stac_url=stac_url,
+                collection=STAC_COLLECTION,
+                date=date,
+                product_suffix=product_suffix,
+                output_file=csv_file
+            )
+        else:
+            logger.info("ℹ Upload deaktiviert – CSV-Generierung aus STAC übersprungen")
+
+        # ----------------------------------------------------------------
         # KML-Overview generieren (via STAC-Abfrage)
-        if result['successful_uploads']> 0:
+        # ----------------------------------------------------------------
+        kml_item_name = None
+        kml_asset_name = None
+
+        if result['successful_uploads'] > 0:
             logger.info("\n" + "=" * 70)
             logger.info("GENERIERE KML-OVERVIEW (via STAC-Abfrage)")
             logger.info("=" * 70)
-            
+
             kml_timestamp = f"{date}t235959"
             kml_item_name = generate_item_name(kml_timestamp, product_type) + "-overview"
             kml_asset_name = kml_item_name + ".kml"
             kml_file = temp_dir / kml_asset_name
-            
-            # STAC-URL
-            stac_url = f"{STAC_SCHEME}://{hostname}{STAC_API_PATH}"
-            
-            # Produkt-Suffix für Abfrage
-            product_suffix = config['suffix'].replace('-mosaic', '')
-            
-            # KML erstellen via STAC-Abfrage
+
             kml_success = create_overview_kml(
                 stac_url=stac_url,
                 collection=STAC_COLLECTION,
@@ -307,9 +330,8 @@ def process_photos_workflow(
                 product_config=config,
                 output_file=kml_file
             )
-           
+
             if kml_success:
-                # Upload KML
                 logger.info(f"\n→ Upload KML-Overview als: {kml_asset_name}")
                 publish_to_stac_wrapper(
                     asset_path=kml_file,
@@ -320,25 +342,27 @@ def process_photos_workflow(
                     asset_title=f"{config['asset_title']}-OVERVIEW",
                     environment=environment
                 )
-                
-        # Cleanup
+
+        # Cleanup + CMS-Ausgabe
+        photos = result['photos']
         if result['successful_uploads'] == len(photos):
+            from utilities.file_handler import cleanup_temp_directory
             cleanup_temp_directory(temp_dir)
-            
-            #Übergabe für CMS
-            logger.info("\n" + "=" * 70)
-            logger.info(f"Nächster Schritt für {config['description']}: URL für rapidmapping.ch")
-            logger.info(f"1) URL öffnen: https://map.geo.admin.ch/#/map?layers=KML|{STAC_SCHEME}://{hostname}/{STAC_COLLECTION}/{kml_item_name}/{kml_asset_name}")
-            logger.info(f"2) Kartenausschnitt: als iFrame in rapidmapping.ch integrieren")
-            logger.info(f"3) Downloadliste: {date}-{product_type.value}.txt")
-            logger.info("=" * 70)
+
+            if kml_item_name:
+                logger.info("\n" + "=" * 70)
+                logger.info(f"Nächster Schritt für {config['description']}: URL für rapidmapping.ch")
+                logger.info(f"1) URL öffnen: https://map.geo.admin.ch/#/map?layers=KML|{STAC_SCHEME}://{hostname}/{STAC_COLLECTION}/{kml_item_name}/{kml_asset_name}")
+                logger.info(f"2) Kartenausschnitt: als iFrame in rapidmapping.ch integrieren")
+                logger.info(f"3) Downloadliste: {csv_file.name}")
+                logger.info("=" * 70)
 
         return result['successful_uploads'] > 0
-            
+
     except Exception as e:
-        logger.error(f"✗ Fehler im Photos-Workflow: {str(e)}")
-        import traceback
-        logger.error(traceback.format_exc())
+        import logging, traceback
+        logging.getLogger(__name__).error(f"✗ Fehler im Photos-Workflow: {str(e)}")
+        logging.getLogger(__name__).error(traceback.format_exc())
         return False
 
 

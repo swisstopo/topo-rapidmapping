@@ -353,6 +353,9 @@ def publish_to_stac(username, password, asset, item_name, collection, geocat_id,
             'tiff': 'TIF'
         }
         asset_type = asset_type_map.get(extension, 'TIF')
+        # Initialisierung — wird für TIF/JPEG/KML gefüllt, für TXT/CSV leer gelassen
+        coordinates_wgs84 = None   
+        dt_iso8601 = None          
 
         # Create ITEM if needed
         try:
@@ -405,12 +408,15 @@ def publish_to_stac(username, password, asset, item_name, collection, geocat_id,
             dt_iso8601 = dt.strftime('%Y-%m-%dT%H:%M:%SZ')
 
             # Create and upload item
-            payload = item_create_json_payload(
-                item, coordinates_wgs84, dt_iso8601,
-                item_title, geocat_id, current, stac_hostname, asset
-            )
+            if coordinates_wgs84 is not None:
+                payload = item_create_json_payload(
+                    item, coordinates_wgs84, dt_iso8601,
+                    item_title, geocat_id, current, stac_hostname, asset
+                )
 
-            upload_item(stac_path + item_path, payload, username, password)
+                upload_item(stac_path + item_path, payload, username, password)
+            else:
+                print(f"  ℹ Item-Erstellung übersprungen (kein Geometry für {asset_type})")
 
         except Exception as e:
             print(f"An error occurred creating object {item}: {e}")

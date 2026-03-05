@@ -96,6 +96,32 @@ def _parse_tifftag_datetime(gdalinfo_output: str) -> Optional[str]:
     return None
 
 
+def _deterministic_subsecond(filename_stem: str) -> str:
+    """
+    Erzeugt eine deterministische 4-stellige Pseudo-Subsekunde (0000–9999)
+    aus dem MD5-Hash des Dateinamens (ohne Extension).
+
+    Eigenschaften:
+      - Idempotent: gleicher Input → immer gleicher Output
+      - Kein Zufall, keine Abhängigkeit von mtime oder Reihenfolge
+      - 10'000 mögliche Werte → Kollisionswahrscheinlichkeit ~0.01% pro Paar
+        (gegenüber ~1.7% bei reinen Sekunden mod 60)
+
+    Verwendet in convert_tif_to_jpg_with_exif() um DMC-4 Burst-Kollisionen
+    aufzulösen (mehrere Bilder pro Sekunde, gleicher TIFFTAG_DATETIME).
+
+    Args:
+        filename_stem: Dateiname ohne Extension, z.B. "001_id111cL150156"
+
+    Returns:
+        4-stelliger String "0000"–"9999"
+    """
+    import hashlib
+    digest = hashlib.md5(filename_stem.encode('utf-8')).hexdigest()
+    value  = int(digest[:4], 16) % 10000   # 0–9999
+    return f"{value:04d}"
+
+
 def _decimal_to_dms_rational(decimal: float) -> List[Tuple[int, int]]:
     """
     Konvertiert Dezimalgrad zu DMS als Liste von (Zähler, Nenner)-Tupeln
@@ -318,8 +344,18 @@ def convert_tif_to_jpg_with_exif(
     # Datum/Zeit
     dt_str = _parse_tifftag_datetime(gdalinfo_text)
     if dt_str:
-        logger.info(f"     ✓ Datum: {dt_str}")
+        # DMC-4 feuert mehrere Belichtungen pro Sekunde → TIFFTAG_DATETIME
+        # ist für Burst-Bilder identisch. Original-Sekunden werden beibehalten,
+        # aber 4 deterministische Stellen (Milli- + Zehntel-Millisekunden) werden
+        # aus dem MD5 des Dateinamens abgeleitet und als EXIF SubSecTimeOriginal
+        # sowie als Item-Name-Suffix angehängt.
+        # Gleicher Input → immer gleicher Output (idempotent).
+        subsec      = _deterministic_subsecond(tif_path.stem)   # "0000"–"9999"
+        dt_str_exif = dt_str                                     # Original "YYYY:MM:DD HH:MM:SS"
+        logger.info(f"     ✓ Datum: {dt_str_exif}  (subsec={subsec})")
     else:
+        subsec      = None
+        dt_str_exif = None
         logger.warning(f"     ⚠ Kein TIFFTAG_DATETIME gefunden")
 
     # ------------------------------------------------------------------
@@ -366,7 +402,7 @@ def convert_tif_to_jpg_with_exif(
     # SCHRITT 3: GPS-EXIF ins JPEG schreiben
     # ------------------------------------------------------------------
     if lat is not None and lon is not None:
-        _write_minimal_exif_gps(jpg_path, lat, lon, dt_str)
+        _write_minimal_exif_gps(jpg_path, lat, lon, dt_str_exif)
     else:
         logger.warning(f"     ⚠ GPS-EXIF übersprungen (keine Koordinaten)")
 
@@ -477,6 +513,14 @@ def generate_csv_from_stac(
 def parse_exif_timestamp(exif_timestamp: Optional[str], photo_name: str) -> str:
     """
     Parsed EXIF-Timestamp zu Item-Timestamp.
+
+    Für TIF-konvertierte Bilder (DMC-4) enthält exif_timestamp die
+    pseudo-eindeutigen Sekunden aus _deterministic_subsecond().
+    Das resultierende Item-Name-Format ist dann:
+      YYYY-MM-DDtHHMMSS  (Standard JPEG)
+    oder für TIF-konvertierte:
+      YYYY-MM-DDtHHMMSS  (Sekunden bereits eindeutig durch MD5-Subsekunde)
+
     Fallback auf Dateinamen oder aktuelles Datum wenn EXIF fehlt.
     """
     if exif_timestamp:
@@ -819,7 +863,14 @@ def process_individual_photos(
                     logger.info(f"     ✓ Zeitstempel: {exif_timestamp}")
 
                 # SCHRITT 2: Item- und Asset-Name
+                # Für TIF-konvertierte Bilder (DMC-4 Burst): deterministische
+                # 4-stellige Subsekunde (Milli + Zehntelmillisekunde) aus MD5
+                # des Dateinamens an den Timestamp anhängen.
+                # Original-Sekunden bleiben erhalten → "t080028" + "4732" = "t0800284732"
+                # Gleicher Dateiname → immer gleicher Item-Name (idempotent).
                 timestamp = parse_exif_timestamp(exif_timestamp, jpg_file.name)
+                subsec    = _deterministic_subsecond(jpg_file.stem)
+                timestamp = timestamp + subsec     # "2025-07-10t080028" + "4732"
                 item_name = generate_item_name(timestamp, product_type)
                 asset_name = item_name
 

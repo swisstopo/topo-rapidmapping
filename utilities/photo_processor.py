@@ -1286,7 +1286,7 @@ def process_individual_photos(
 
                 # SCHRITT 4: Thumbnail erstellen
                 logger.info(f"  4️⃣  Erstelle Thumbnail (gdal_translate)...")
-                temp_thumbnail_path = temp_dir / f"thumbnail_{asset_name}.jpg"
+                temp_thumbnail_path = temp_dir / "thumbnail.jpg"
 
                 thumbnail_success = resize_image_gdal(
                     temp_photo_path,

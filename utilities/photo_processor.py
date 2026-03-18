@@ -516,31 +516,54 @@ def convert_tif_to_jpg_with_exif(
     orig_cols = int(_size_m.group(1)) if _size_m else None
     orig_rows = int(_size_m.group(2)) if _size_m else None
 
-    # GeoTransform für -te Berechnung parsen
+    # GeoTransform für -te Berechnung parsen.
+    # Alle 6 Koeffizienten einlesen — bei gedrehten Bildern (z.B. 90°) sind
+    # die Schrägstellungs-Terme (row_rot, col_rot) dominant und dürfen nicht
+    # ignoriert werden. Alle 4 Ecken berechnen → min/max → korrekter Extent.
     _gt_m = re.search(
         r'GeoTransform\s*=\s*'
-        r'([\-\d\.e\+]+),\s*([\-\d\.e\+]+),\s*[\-\d\.e\+]+\s*\n'
-        r'\s*([\-\d\.e\+]+),\s*[\-\d\.e\+]+,\s*([\-\d\.e\+]+)',
+        r'([\-\d\.e\+]+),\s*([\-\d\.e\+]+),\s*([\-\d\.e\+]+)\s*\n'
+        r'\s*([\-\d\.e\+]+),\s*([\-\d\.e\+]+),\s*([\-\d\.e\+]+)',
         gdalinfo_text
     )
     if _gt_m and orig_cols and orig_rows:
-        _ox  = float(_gt_m.group(1))
-        _pw  = float(_gt_m.group(2))
-        _oy  = float(_gt_m.group(3))
-        _ph  = float(_gt_m.group(4))
-        _xmin = min(_ox, _ox + _pw * orig_cols)
-        _xmax = max(_ox, _ox + _pw * orig_cols)
-        _ymin = min(_oy, _oy + _ph * orig_rows)
-        _ymax = max(_oy, _oy + _ph * orig_rows)
-        te_args = ['-te', str(_xmin), str(_ymin), str(_xmax), str(_ymax)]
+        _ox      = float(_gt_m.group(1))
+        _pw      = float(_gt_m.group(2))
+        _row_rot = float(_gt_m.group(3))
+        _oy      = float(_gt_m.group(4))
+        _col_rot = float(_gt_m.group(5))
+        _ph      = float(_gt_m.group(6))
+        # Alle 4 Ecken mit vollständiger Affin-Transformation berechnen
+        _corners_x = [
+            _ox + _pw * c + _row_rot * r
+            for c, r in [(0, 0), (orig_cols, 0), (0, orig_rows), (orig_cols, orig_rows)]
+        ]
+        _corners_y = [
+            _oy + _col_rot * c + _ph * r
+            for c, r in [(0, 0), (orig_cols, 0), (0, orig_rows), (orig_cols, orig_rows)]
+        ]
+        te_args = ['-te',
+                   str(min(_corners_x)), str(min(_corners_y)),
+                   str(max(_corners_x)), str(max(_corners_y))]
     else:
         te_args = []
 
     if needs_gdalwarp:
-        # gdalwarp TIF → JPEG mit -te (exakter geogr. Extent) + -ts (exakte Pixelgrösse).
-        # Beide zusammen zwingen gdalwarp zu exakt orig_cols x orig_rows Pixeln ohne
-        # Strecken durch Längengrad/Breitengrad-Aspektverhältnis bei 47°N.
-        ts_args = ['-ts', str(orig_cols), str(orig_rows)] if orig_cols and orig_rows else []
+        # gdalwarp TIF → JPEG mit -te (exakter geogr. Extent) + -ts (korrekte Pixelgrösse).
+        # -ts wird aus dem Extent und der originalen Pixelgrösse (als Vektorbetrag) berechnet.
+        # Das ist nötig weil bei gedrehten Bildern (z.B. 90°) Breite und Höhe tauschen.
+        ts_args = []
+        if te_args and _gt_m and orig_cols and orig_rows:
+            import math as _math
+            _px_size_x = _math.sqrt(float(_gt_m.group(2))**2 + float(_gt_m.group(3))**2)
+            _px_size_y = _math.sqrt(float(_gt_m.group(5))**2 + float(_gt_m.group(6))**2)
+            if _px_size_x > 0 and _px_size_y > 0:
+                _ext_x = max(_corners_x) - min(_corners_x)
+                _ext_y = max(_corners_y) - min(_corners_y)
+                _out_cols = max(1, round(_ext_x / _px_size_x))
+                _out_rows = max(1, round(_ext_y / _px_size_y))
+                ts_args = ['-ts', str(_out_cols), str(_out_rows)]
+                logger.info(f"     → Output-Größe: {_out_cols}×{_out_rows}px (Extent÷Pixelgrösse)")
         try:
             warp_result = subprocess.run(
                 [

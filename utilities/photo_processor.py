@@ -294,21 +294,10 @@ def _write_minimal_exif_gps(jpg_path: Path, lat: float, lon: float, dt_str: Opti
     """
     Schreibt GPS-EXIF + DateTimeOriginal direkt in ein JPEG (in-place).
 
-    Wenn dt_str das erweiterte Format "YYYY:MM:DD HH:MM:SS:NN" (mit ms-Offset)
-    enthält, werden nur die ersten 19 Zeichen ins EXIF geschrieben — der Offset
-    dient ausschließlich der Item-Name-Eindeutigkeit.
-
-    Struktur des generierten APP1-Segments:
-      TIFF-Header (8)
-      IFD0 (2 + 2*12 + 4 = 30):  Tag 0x8769 (Exif SubIFD), Tag 0x8825 (GPS IFD)
-      Exif SubIFD (2 + 1*12 + 4 = 18):  Tag 0x9003 DateTimeOriginal → ASCII value
-      GPS IFD     (2 + 4*12 + 4 = 54):  LatRef, Lat, LonRef, Lon → value data
-      Value-Daten:
-        DateTimeOriginal ASCII (20 bytes: "YYYY:MM:DD HH:MM:SS\0")
-        GPSLatitudeRef  ASCII  (2 bytes)
-        GPSLongitudeRef ASCII  (2 bytes)
-        GPSLatitude  Rational  (24 bytes)
-        GPSLongitude Rational  (24 bytes)
+    EXIF-Inline-Regel: Werte die ≤ 4 Bytes benötigen werden direkt im
+    IFD-Eintrag (value_offset-Feld) gespeichert, nicht als Pointer.
+    GPSLatitudeRef / GPSLongitudeRef sind ASCII count=2 → immer INLINE.
+    DateTimeOriginal (20 Bytes) und RATIONAL-Koordinaten (24 Bytes) → Pointer.
 
     Returns:
         True bei Erfolg, False bei Fehler
@@ -321,7 +310,7 @@ def _write_minimal_exif_gps(jpg_path: Path, lat: float, lon: float, dt_str: Opti
             logger.warning(f"  ⚠ Kein gültiges JPEG: {jpg_path.name}")
             return False
 
-        BIG = '>'  # Motorola / Big-Endian
+        BIG = '>'
 
         def pack_rational(num, den):
             return struct.pack(f'{BIG}II', num, den)
@@ -332,7 +321,7 @@ def _write_minimal_exif_gps(jpg_path: Path, lat: float, lon: float, dt_str: Opti
 
         TIFF_HDR_SIZE    = 8
         IFD0_ENTRIES     = 2
-        IFD0_SIZE        = 2 + IFD0_ENTRIES * 12 + 4    # 30
+        IFD0_SIZE        = 2 + IFD0_ENTRIES * 12 + 4      # 30
         EXIF_IFD_ENTRIES = 1
         EXIF_IFD_SIZE    = 2 + EXIF_IFD_ENTRIES * 12 + 4  # 18
         GPS_IFD_ENTRIES  = 4
@@ -343,38 +332,45 @@ def _write_minimal_exif_gps(jpg_path: Path, lat: float, lon: float, dt_str: Opti
         gps_ifd_offset  = exif_ifd_offset + EXIF_IFD_SIZE
         values_offset   = gps_ifd_offset  + GPS_IFD_SIZE
 
-        # ms-Offset-Suffix abschneiden: EXIF erwartet "YYYY:MM:DD HH:MM:SS\0" (20 bytes)
+        # ms-Offset-Suffix abschneiden
         dt_exif = dt_str[:19] if dt_str else ''
         dt_ascii = (dt_exif.encode('ascii') + b'\x00')[:20].ljust(20, b'\x00')
 
-        off_dt      = values_offset
-        off_lat_ref = off_dt     + 20
-        off_lon_ref = off_lat_ref + 2
-        off_lat     = off_lon_ref + 2
-        off_lon     = off_lat    + 24
+        # Externe Wertedaten: nur DateTimeOriginal (20B) + Koordinaten (24B+24B)
+        # GPSLatitudeRef + GPSLongitudeRef werden INLINE gespeichert (je 2 Bytes → ≤ 4B)
+        off_dt  = values_offset       # 20 bytes → DateTimeOriginal
+        off_lat = off_dt  + 20        # 24 bytes → GPSLatitude  (3×Rational)
+        off_lon = off_lat + 24        # 24 bytes → GPSLongitude (3×Rational)
 
-        lat_ref      = b'N\x00' if lat >= 0 else b'S\x00'
-        lon_ref      = b'E\x00' if lon >= 0 else b'W\x00'
+        # Inline-Werte für 2-Byte ASCII Ref-Felder:
+        # Big-Endian: Zeichen in Byte 0, Rest mit 0x00 → "N\0\0\0" für N
+        lat_ref_inline = b'N\x00\x00\x00' if lat >= 0 else b'S\x00\x00\x00'
+        lon_ref_inline = b'E\x00\x00\x00' if lon >= 0 else b'W\x00\x00\x00'
+
         lat_rational = b''.join(pack_rational(n, d) for n, d in _decimal_to_dms_rational(lat))
         lon_rational = b''.join(pack_rational(n, d) for n, d in _decimal_to_dms_rational(lon))
 
+        # IFD0
         ifd0  = struct.pack(f'{BIG}H', IFD0_ENTRIES)
         ifd0 += struct.pack(f'{BIG}HHII', 0x8769, TYPE_LONG, 1, exif_ifd_offset)
         ifd0 += struct.pack(f'{BIG}HHII', 0x8825, TYPE_LONG, 1, gps_ifd_offset)
         ifd0 += struct.pack(f'{BIG}I', 0)
 
+        # Exif SubIFD: DateTimeOriginal → Pointer (20 bytes, zu groß für inline)
         exif_ifd  = struct.pack(f'{BIG}H', EXIF_IFD_ENTRIES)
-        exif_ifd += struct.pack(f'{BIG}HHII', 0x9003, TYPE_ASCII, 20, off_dt)
+        exif_ifd += struct.pack(f'{BIG}HHI', 0x9003, TYPE_ASCII, 20) + struct.pack(f'{BIG}I', off_dt)
         exif_ifd += struct.pack(f'{BIG}I', 0)
 
+        # GPS IFD: LatRef/LonRef inline, Lat/Lon als Pointer
         gps_ifd  = struct.pack(f'{BIG}H', GPS_IFD_ENTRIES)
-        gps_ifd += struct.pack(f'{BIG}HHII', 0x0001, TYPE_ASCII,    2, off_lat_ref)
-        gps_ifd += struct.pack(f'{BIG}HHII', 0x0002, TYPE_RATIONAL, 3, off_lat)
-        gps_ifd += struct.pack(f'{BIG}HHII', 0x0003, TYPE_ASCII,    2, off_lon_ref)
-        gps_ifd += struct.pack(f'{BIG}HHII', 0x0004, TYPE_RATIONAL, 3, off_lon)
+        gps_ifd += struct.pack(f'{BIG}HHI', 0x0001, TYPE_ASCII, 2)    + lat_ref_inline   # INLINE
+        gps_ifd += struct.pack(f'{BIG}HHII', 0x0002, TYPE_RATIONAL, 3, off_lat)           # Pointer
+        gps_ifd += struct.pack(f'{BIG}HHI', 0x0003, TYPE_ASCII, 2)    + lon_ref_inline   # INLINE
+        gps_ifd += struct.pack(f'{BIG}HHII', 0x0004, TYPE_RATIONAL, 3, off_lon)           # Pointer
         gps_ifd += struct.pack(f'{BIG}I', 0)
 
-        values       = dt_ascii + lat_ref + lon_ref + lat_rational + lon_rational
+        # Nur externe Wertedaten (Ref-Felder sind jetzt inline → nicht mehr hier)
+        values       = dt_ascii + lat_rational + lon_rational
         tiff_header  = b'MM\x00\x2a' + struct.pack(f'{BIG}I', ifd0_offset)
         exif_payload = tiff_header + ifd0 + exif_ifd + gps_ifd + values
         app1_data    = b'Exif\x00\x00' + exif_payload
@@ -398,11 +394,6 @@ def _write_minimal_exif_gps(jpg_path: Path, lat: float, lon: float, dt_str: Opti
     except Exception as e:
         logger.warning(f"     ⚠ EXIF-Schreiben fehlgeschlagen: {e}")
         return False
-
-
-# ==============================================================================
-# HAUPT-KONVERTIERUNG — mit Rotation + ms-Offset-Übergabe
-# ==============================================================================
 
 def convert_tif_to_jpg_with_exif(
     tif_path: Path,

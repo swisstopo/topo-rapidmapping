@@ -206,6 +206,264 @@ def _rotate_to_north_up(jpg_path: Path, angle_deg: float, quality: int = 85) -> 
 
 
 # ==============================================================================
+# NEU v2.3 — MINIMALE DATEIAUSWAHL FÜR FLÄCHENDECKUNG (Greedy Set Cover)
+# ==============================================================================
+
+def _parse_bbox_from_gdalinfo(gdalinfo_output: str) -> Optional[Tuple[float, float, float, float]]:
+    """
+    Extrahiert die Bounding Box (xmin, ymin, xmax, ymax) aus allen 4 Eckpunkt-
+    Koordinaten in gdalinfo-Output. Verwendet Corner Coordinates für maximale
+    Genauigkeit auch bei gedrehten Bildern.
+
+    gdalinfo gibt Koordinaten in (lon, lat) aus:
+      Upper Left  (  lon,  lat)
+      Lower Left  (  lon,  lat)
+      Upper Right (  lon,  lat)
+      Lower Right (  lon,  lat)
+
+    Returns:
+        (xmin, ymin, xmax, ymax) in WGS84-Dezimalgrad, oder None
+    """
+    pattern = r'(?:Upper Left|Lower Left|Upper Right|Lower Right)\s+\(\s*([\-\d\.]+),\s*([\-\d\.]+)\)'
+    matches = re.findall(pattern, gdalinfo_output)
+    if len(matches) < 4:
+        # Fallback: aus GeoTransform + Bildgrösse berechnen
+        gt_m = re.search(
+            r'GeoTransform\s*=\s*'
+            r'([\-\d\.e\+]+),\s*([\-\d\.e\+]+),\s*([\-\d\.e\+]+)\s*\n'
+            r'\s*([\-\d\.e\+]+),\s*([\-\d\.e\+]+),\s*([\-\d\.e\+]+)',
+            gdalinfo_output
+        )
+        sz_m = re.search(r'Size is (\d+), (\d+)', gdalinfo_output)
+        if not (gt_m and sz_m):
+            return None
+        ox, pw, rr = float(gt_m.group(1)), float(gt_m.group(2)), float(gt_m.group(3))
+        oy, cr, ph = float(gt_m.group(4)), float(gt_m.group(5)), float(gt_m.group(6))
+        cols, rows = int(sz_m.group(1)), int(sz_m.group(2))
+        xs = [ox + pw*c + rr*r for c, r in [(0,0),(cols,0),(0,rows),(cols,rows)]]
+        ys = [oy + cr*c + ph*r for c, r in [(0,0),(cols,0),(0,rows),(cols,rows)]]
+        return (min(xs), min(ys), max(xs), max(ys))
+
+    xs = [float(m[0]) for m in matches]
+    ys = [float(m[1]) for m in matches]
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+def _bbox_union_area(bboxes: List[Tuple[float, float, float, float]]) -> float:
+    """
+    Berechnet die Fläche der Vereinigung von achsenparallelen Rechtecken.
+    Verwendet Sweep-Line-Algorithmus: O(n² log n), exakt, keine Näherung.
+
+    Args:
+        bboxes: Liste von (xmin, ymin, xmax, ymax)
+
+    Returns:
+        Fläche in Quadrat-Dezimalgrad (nur für relative Vergleiche verwendet)
+    """
+    if not bboxes:
+        return 0.0
+
+    ys = sorted(set(y for b in bboxes for y in (b[1], b[3])))
+    total = 0.0
+
+    for i in range(len(ys) - 1):
+        y0, y1 = ys[i], ys[i + 1]
+        dy = y1 - y0
+        if dy <= 0:
+            continue
+        # x-Intervalle aller Boxen die diesen y-Streifen überdecken
+        intervals = sorted(
+            (b[0], b[2]) for b in bboxes if b[1] <= y0 and b[3] >= y1
+        )
+        # Intervalle zusammenführen und x-Länge summieren
+        cx0 = cx1 = None
+        covered_x = 0.0
+        for x0, x1 in intervals:
+            if cx0 is None:
+                cx0, cx1 = x0, x1
+            elif x0 <= cx1:
+                cx1 = max(cx1, x1)
+            else:
+                covered_x += cx1 - cx0
+                cx0, cx1 = x0, x1
+        if cx0 is not None:
+            covered_x += cx1 - cx0
+        total += covered_x * dy
+
+    return total
+
+
+def _select_by_strip(
+    tif_files: List[Path],
+) -> Optional[List[Path]]:
+    """
+    Erkennt das DMC-4 Dateinamen-Muster NNN_idXXXcLYYYYYY.tif und wählt
+    pro Flugstreifen (NNN) genau eine Kameraposition aus.
+
+    Kamera-Priorität: 150157 (Nadir-Mitte) > 150158 > 150156
+
+    Returns:
+        Liste der ausgewählten Dateien, oder None wenn Muster nicht erkannt.
+    """
+    from collections import defaultdict
+
+    PATTERN        = re.compile(r'^(\d+)_id\d+cL(\d+)\.tif$', re.IGNORECASE)
+    CAMERA_PRIO    = ['150157', '150158', '150156']
+
+    strips: dict = defaultdict(list)
+    unmatched = 0
+
+    for tif in tif_files:
+        m = PATTERN.match(tif.name)
+        if m:
+            strips[int(m.group(1))].append({'path': tif, 'camera': m.group(2)})
+        else:
+            unmatched += 1
+
+    # Nur anwenden wenn mindestens 80% der Dateien dem Muster entsprechen
+    if unmatched > len(tif_files) * 0.2:
+        return None
+
+    selected: List[Path] = []
+    for strip_num in sorted(strips.keys()):
+        files_in_strip = strips[strip_num]
+        if len(files_in_strip) == 1:
+            selected.append(files_in_strip[0]['path'])
+        else:
+            # Bevorzuge Kamera mit höchster Priorität
+            chosen = None
+            for cam in CAMERA_PRIO:
+                chosen = next((f['path'] for f in files_in_strip if f['camera'] == cam), None)
+                if chosen:
+                    break
+            if chosen:
+                selected.append(chosen)
+
+    logger.info(
+        f"  Streifen-Muster erkannt: {len(strips)} Streifen × bis zu 3 Kameras "
+        f"→ {len(selected)} Dateien (eine pro Streifen)"
+    )
+    return selected
+
+
+
+def select_minimal_coverage_files(
+    tif_files: List[Path],
+    gdalinfo_cache: Dict[Path, str],
+    coverage_threshold: float = 0.95,
+) -> Tuple[List[Path], Dict[Path, Tuple[float, float, float, float]]]:
+    """
+    Wählt die minimale Anzahl TIF-Dateien aus, die zusammen mindestens
+    coverage_threshold des Gesamtgebiets abdecken.
+
+    Algorithmus: Greedy Set Cover auf Bounding-Box-Basis
+      1. Bounding Boxes aller Dateien aus gdalinfo-Cache extrahieren
+      2. Gesamtfläche (Union aller BBs) berechnen
+      3. Iterativ die Datei auswählen, die den größten noch nicht abgedeckten
+         Bereich hinzufügt, bis Schwellenwert erreicht
+
+    WICHTIG — AABB-Überabschätzung:
+      Die Bounding Boxes sind achsenparallele Rechtecke (AABB). Für gedrehte
+      Bilder (z.B. 90°) überschätzt die AABB die tatsächliche Pixelfläche.
+      Deshalb ist der Standard-Schwellenwert 95% (nicht 98% oder 100%),
+      um zu vermeiden dass echte Randstreifen versehentlich weggelassen werden.
+
+    Dateien ohne parsbare BB werden immer eingeschlossen (safe fallback).
+
+    Args:
+        tif_files:          Sortierte Liste aller TIF-Dateien
+        gdalinfo_cache:     {tif_path: gdalinfo_text}
+        coverage_threshold: Abdeckungsgrad (Standard 0.95 = 95%)
+
+    Returns:
+        (selected_files, bbox_map)
+        selected_files: Ausgewählte Dateien (original Sortierreihenfolge)
+        bbox_map:       {tif_path: (xmin, ymin, xmax, ymax)} für alle Dateien
+    """
+    # Schnellpfad: DMC-4 Streifen-Muster erkennen (NNN_idXXXcLYYYYYY.tif)
+    # → garantiert lückenlose Abdeckung ohne AABB-Überabschätzungsproblem
+    strip_selection = _select_by_strip(tif_files)
+    if strip_selection is not None:
+        skipped = len(tif_files) - len(strip_selection)
+        logger.info(f"  ✓ Streifen-Auswahl: {len(strip_selection)} von {len(tif_files)} "
+                    f"({skipped} übersprungen — doppelte Kameraspuren)")
+        bbox_map_out = {}
+        for tif in tif_files:
+            bb = _parse_bbox_from_gdalinfo(gdalinfo_cache.get(tif, ''))
+            if bb:
+                bbox_map_out[tif] = bb
+        return strip_selection, bbox_map_out
+
+    # Fallback: Greedy Set Cover auf AABB-Basis (für unbekannte Dateinamen-Schemata)
+    logger.info("  Kein Streifen-Muster erkannt → Greedy Set Cover (AABB 95%)...")
+
+    # Bounding Boxes extrahieren
+    bbox_map: Dict[Path, Optional[Tuple[float, float, float, float]]] = {}
+    no_bbox:  List[Path] = []
+
+    for tif in tif_files:
+        bb = _parse_bbox_from_gdalinfo(gdalinfo_cache.get(tif, ''))
+        if bb is not None:
+            bbox_map[tif] = bb
+        else:
+            no_bbox.append(tif)
+            logger.warning(f"  ⚠ Keine BBox für {tif.name} — wird immer eingeschlossen")
+
+    parseable = [t for t in tif_files if t in bbox_map]
+
+    if not parseable:
+        logger.warning("  ⚠ Keine Bounding Boxes verfügbar — alle Dateien werden verarbeitet")
+        return tif_files, {t: bbox_map[t] for t in tif_files if t in bbox_map}
+
+    all_bboxes  = [bbox_map[t] for t in parseable]
+    total_area  = _bbox_union_area(all_bboxes)
+
+    if total_area <= 0:
+        return tif_files, bbox_map
+
+    selected:         List[Path]                              = []
+    covered_bboxes:   List[Tuple[float, float, float, float]] = []
+    remaining:        List[Path]                              = list(parseable)
+    current_coverage: float                                   = 0.0
+
+    logger.info(f"  Gesamtfläche: {total_area:.8f} sq.deg | Ziel: ≥{coverage_threshold:.0%}")
+
+    while remaining and current_coverage < coverage_threshold:
+        best_tif      = None
+        best_new_area = -1.0
+
+        for tif in remaining:
+            candidate_area = _bbox_union_area(covered_bboxes + [bbox_map[tif]])
+            added = candidate_area - _bbox_union_area(covered_bboxes)
+            if added > best_new_area:
+                best_new_area = added
+                best_tif      = tif
+
+        if best_tif is None:
+            break
+
+        selected.append(best_tif)
+        remaining.remove(best_tif)
+        covered_bboxes.append(bbox_map[best_tif])
+        current_coverage = _bbox_union_area(covered_bboxes) / total_area
+
+        logger.info(
+            f"  + {best_tif.name}  "
+            f"(+{best_new_area/total_area:.1%} → gesamt {current_coverage:.1%})"
+        )
+
+    skipped = len(parseable) - len(selected)
+    logger.info(
+        f"  ✓ Auswahl: {len(selected)} von {len(tif_files)} Dateien "
+        f"({skipped} übersprungen, {current_coverage:.1%} Abdeckung)"
+    )
+
+    # Dateien ohne BB immer anhängen
+    final_selection = selected + no_bbox
+    return final_selection, {t: bbox_map[t] for t in tif_files if t in bbox_map}
+
+
+# ==============================================================================
 # NEU v2.2 — FIX 2: SEQUENTIELLE MS-OFFSETS FÜR BURST-TIMESTAMPS
 # ==============================================================================
 
@@ -1166,8 +1424,30 @@ def process_individual_photos(
                 # ms-Offsets zuweisen
                 ts_with_offset = _assign_sequential_ms_offsets(tif_files, gdalinfo_cache)
 
+                # ----------------------------------------------------------------
+                # NEU v2.3: Minimale Dateiauswahl für Flächendeckung
+                # Wählt die kleinste Teilmenge aus, die ≥95% des Gesamtgebiets
+                # abdeckt (AABB-Basis, 95% wegen Überabschätzung bei gedrehten
+                # Bildern — echte Randstreifen werden so nicht versehentlich
+                # weggelassen).
+                # ----------------------------------------------------------------
+                logger.info("  Berechne minimale Dateiauswahl (Greedy Set Cover, AABB 95%)...")
+                selected_tifs, _ = select_minimal_coverage_files(
+                    tif_files=tif_files,
+                    gdalinfo_cache=gdalinfo_cache,
+                    coverage_threshold=0.95,
+                )
+                # Reihenfolge beibehalten (original sort, nicht Greedy-Reihenfolge)
+                selected_set = set(selected_tifs)
+                tif_files_to_process = [t for t in tif_files if t in selected_set]
+                dropped = [t for t in tif_files if t not in selected_set]
+                if dropped:
+                    logger.info(f"  Übersprungen ({len(dropped)} Dateien mit >95% Überlappung):")
+                    for t in dropped:
+                        logger.info(f"    ⏭ {t.name}")
+
                 # Arbeitsliste aufbauen (noch keine Konvertierung)
-                for tif in tif_files:
+                for tif in tif_files_to_process:
                     effective_ts = ts_with_offset.get(tif, '')
                     # JPEG-Stem mit ms-Offset kodieren
                     if effective_ts and len(effective_ts) > 19:

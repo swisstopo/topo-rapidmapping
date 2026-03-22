@@ -53,11 +53,18 @@ from base64 import b64encode
 from datetime import datetime
 from hashlib import md5
 
+import logging
 import multihash
 import requests
 # retry and timeout support
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry  # pylint: disable=import-error
+
+logger = logging.getLogger(__name__)
+
+# Lock: sys.argv is global — parallel workers must not mutate it simultaneously
+import threading as _threading
+_ARGV_LOCK = _threading.Lock()
 
 # For large parts, it might help to increase the DEFAULT_TIMEOUT
 DEFAULT_TIMEOUT = 180  # Increased from 60 to 180 seconds for VPN/large files
@@ -134,13 +141,13 @@ def initialize_http_session(proxy_config=None):
             # Disable SSL warnings
             import urllib3
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-            print(f"⚠ STAC API session initialized with proxy (SSL verification disabled): {proxy_config['proxies'].get('https', proxy_config['proxies'].get('http'))}")
+            logger.debug(f"STAC API session: proxy (SSL disabled): {proxy_config['proxies'].get('https', proxy_config['proxies'].get('http'))}")
         else:
             http.verify = True
-            print(f"✓ STAC API session initialized with proxy: {proxy_config['proxies'].get('https', proxy_config['proxies'].get('http'))}")
+            logger.debug(f"✓ STAC API session: proxy {proxy_config['proxies'].get('https', proxy_config['proxies'].get('http'))}")
     else:
         http.verify = True
-        print("✓ STAC API session initialized without proxy (direct connection)")
+        logger.debug("✓ STAC API session: direct connection")
     
     http.mount("http://", adapter)
     http.mount("https://", adapter)
@@ -171,12 +178,12 @@ def initialize_http_session(proxy_config=None):
         s3_session.verify = False
         import urllib3
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        print(f"⚠ S3 upload session initialized with proxy (SSL verification disabled): {proxy_config['proxies'].get('https', proxy_config['proxies'].get('http'))}")
+        logger.debug(f"S3 session: proxy (SSL disabled): {proxy_config['proxies'].get('https', proxy_config['proxies'].get('http'))}")
     else:
         # No proxy = no corporate network = normal SSL verification, no proxy
         s3_session.verify = True
         s3_session.proxies = {}
-        print("✓ S3 upload session initialized without proxy (direct connection)")
+        logger.debug("✓ S3 session: direct connection")
     
     s3_session.mount("http://", s3_adapter)
     s3_session.mount("https://", s3_adapter)
@@ -290,41 +297,29 @@ class StacMultipartUploader:
     def _log(self, message, verbose=True, request=None, response=None):
         '''Log message and optional request/response details'''
         if verbose:
-            if request:
-                if self.verbose:
-                    print(f"  Request:")
-                    print(f"    URL: {request.url}")
-                    print(f"    Method: {request.method}")
-                    if request.body:
-                        try:
-                            body_dict = json.loads(request.body)
-                            print(f"    Body (JSON):\n{json.dumps(body_dict, indent=2)}")
-                        except (json.JSONDecodeError, TypeError):
-                            print(f"    Body (raw): {request.body[:200]}")
-            if response:
-                if self.verbose:
-                    print(f"  Response:")
-                    print(f"    Status Code: {response.status_code}")
-                    print(f"    Reason: {response.reason}")
+            if request and self.verbose:
+                logger.debug(f"  Request: {request.method} {request.url}")
+                if request.body:
                     try:
-                        response_dict = response.json()
-                        print(f"    Body (JSON):\n{json.dumps(response_dict, indent=2)}")
-                    except (json.JSONDecodeError, ValueError):
-                        print(f"    Body (raw):\n{response.text}")
+                        body_dict = json.loads(request.body)
+                        logger.debug(f"  Body: {json.dumps(body_dict, indent=2)}")
+                    except (json.JSONDecodeError, TypeError):
+                        logger.debug(f"  Body (raw): {request.body[:200]}")
+            if response and self.verbose:
+                logger.debug(f"  Response: {response.status_code} {response.reason}")
+                try:
+                    logger.debug(f"  Body: {json.dumps(response.json(), indent=2)}")
+                except (json.JSONDecodeError, ValueError):
+                    logger.debug(f"  Body (raw): {response.text}")
         else:
-            print(message)
-
-        print()
+            logger.debug(message)
 
     def _generate_hashes(self):
         '''Returns the hashes for the file parts to upload. Called by the constructor.'''
         sha256 = hashlib.sha256()
         md5_parts = []
         if self.verbose:
-            self._log(
-                f"Reading {self.asset_file_name} and calculating parts and md5sum:",
-                verbose=self.verbose
-            )
+            logger.debug(f"Reading {self.asset_file_name} and calculating parts and md5sum:")
         with open(self.asset_file_name, 'rb') as file_descriptor:
             while True:
                 data = file_descriptor.read(self.part_size)
@@ -333,9 +328,7 @@ class StacMultipartUploader:
                 sha256.update(data)
                 md5_parts.append({'part_number': len(md5_parts) + 1, 'md5': b64_md5(data)})
                 if self.verbose:
-                    print(len(md5_parts), end="..", flush=True)
-
-        print()
+                    logger.debug(f"  Hashing part {len(md5_parts)}...")
         sha2_256 = multihash.encode(sha256.digest(), 'sha2-256')
         checksum_multihash = multihash.to_hex_string(sha2_256)
         return (checksum_multihash, md5_parts)
@@ -445,7 +438,7 @@ class StacMultipartUploader:
                             if retry > 0:
                                 import time
                                 wait_time = (6 - retry) * 2  # Progressive backoff: 2, 4, 6, 8 seconds
-                                print(f"  ⚠ Part {url['part']} failed: {last_error}. Retrying in {wait_time}s... ({retry} attempts left)")
+                                logger.warning(f"  ⚠ Part {url['part']} failed: {last_error}. Retry in {wait_time}s ({retry} left)")
                                 time.sleep(wait_time)
                             else:
                                 raise HttpError(response, f'Failed to upload part {url["part"]} after 5 attempts')
@@ -456,10 +449,10 @@ class StacMultipartUploader:
                         if retry > 0:
                             import time
                             wait_time = (6 - retry) * 2
-                            print(f"  ⚠ Part {url['part']} SSL error. Retrying in {wait_time}s... ({retry} attempts left)")
+                            logger.warning(f"  ⚠ Part {url['part']} SSL error. Retry in {wait_time}s ({retry} left)")
                             time.sleep(wait_time)
                         else:
-                            print(f"  ✗ Part {url['part']} failed after 5 attempts: {last_error}")
+                            logger.error(f"  ✗ Part {url['part']} failed after 5 attempts: {last_error}")
                             raise
                     
                     except requests.exceptions.RequestException as req_err:
@@ -468,10 +461,10 @@ class StacMultipartUploader:
                         if retry > 0:
                             import time
                             wait_time = (6 - retry) * 2
-                            print(f"  ⚠ Part {url['part']} request error. Retrying in {wait_time}s... ({retry} attempts left)")
+                            logger.warning(f"  ⚠ Part {url['part']} request error. Retry in {wait_time}s ({retry} left)")
                             time.sleep(wait_time)
                         else:
-                            print(f"  ✗ Part {url['part']} failed after 5 attempts: {last_error}")
+                            logger.error(f"  ✗ Part {url['part']} failed after 5 attempts: {last_error}")
                             raise
 
         return parts
@@ -534,29 +527,29 @@ def multipart_upload(env, collection, item, asset, filepath, username, password,
     os.environ['STAC_USER'] = username
     os.environ['STAC_PASSWORD'] = password
 
-    # Build command-line arguments for the uploader
-    sys.argv = [
+    # Build command-line arguments for the uploader.
+    # CRITICAL: sys.argv is global — use a lock so parallel workers
+    # don't overwrite each other's arguments mid-upload.
+    argv = [
         'main_multipart_upload_via_api.py',
-        env,
-        collection,
-        item,
-        asset,
-        filepath,
+        env, collection, item, asset, filepath,
         '--username', username,
-        '--password', password
+        '--password', password,
     ]
-    if verbose:
-        sys.argv.append('--verbose')
+    if verbose: argv.append('--verbose')
+    if force:   argv.append('--force')
 
-    if force:
-        sys.argv.append('--force')
+    # Lock only during construction (reads sys.argv via get_args()).
+    # upload_file() uses only instance variables — safe to run in parallel.
+    with _ARGV_LOCK:
+        sys.argv = argv
+        uploader = StacMultipartUploader(proxy_config=proxy_config)
 
     try:
-        # Pass proxy_config to the uploader
-        StacMultipartUploader(proxy_config=proxy_config).upload_file()
+        uploader.upload_file()
         return True
     except Exception as e:
-        print(f"Upload failed: {str(e)}")
+        logger.error(f"Upload failed: {str(e)}")
         return False
 
 

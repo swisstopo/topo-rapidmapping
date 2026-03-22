@@ -34,6 +34,11 @@ PROXY_CONFIG = {
     'is_vpn': False  # NEW: Markiert ob VPN-Verbindung erkannt wurde
 }
 
+# Thread-Lock: verhindert parallele Proxy-Initialisierung durch Worker-Threads
+import threading as _threading
+_PROXY_INIT_LOCK = _threading.Lock()
+
+
 # Default Settings (Fallback wenn keine Config-Datei vorhanden)
 DEFAULT_PROXY_CONFIG = {
     'proxies': [
@@ -254,11 +259,11 @@ def detect_proxy_requirement() -> Dict:
             use_ssl = works_with_ssl and not is_vpn
             
             if use_ssl:
-                logger.info(f"  ✓ Verbindung über Proxy '{proxy_name}' erfolgreich (mit SSL-Verifikation)")
+                logger.info(f"  Proxy '{proxy_name}': OK (SSL aktiv)")
             else:
-                logger.warning(f"  ⚠ Verbindung über Proxy '{proxy_name}' erfolgreich (SSL-Verifikation deaktiviert)")
+                logger.info(f"  Proxy '{proxy_name}': OK (SSL deaktiviert)")
                 if is_vpn:
-                    logger.warning("  ⚠ VPN-Verbindung erkannt - SSL-Handling wird angepasst")
+                    logger.info("  VPN erkannt")
             
             session = requests.Session()
             session.proxies.update(proxies)
@@ -289,56 +294,32 @@ def detect_proxy_requirement() -> Dict:
 
 def initialize_proxy():
     """
-    Initialisiert Proxy-Konfiguration und speichert in PROXY_CONFIG.
-    
-    Diese Funktion:
-    1. Prüft ob bereits initialisiert (falls ja, überspringt Tests)
-    2. Führt Proxy-Tests durch
-    3. Speichert Ergebnisse in globaler PROXY_CONFIG
-    
-    Sollte beim Programmstart aufgerufen werden.
-    
-    Raises:
-        ConnectionError: Wenn keine Internet-Verbindung möglich ist
+    Initialisiert Proxy-Konfiguration. Thread-sicher: parallele Aufrufe
+    warten bis der erste fertig ist und verwenden dann das Ergebnis.
     """
     global PROXY_CONFIG
-    
-    # ========================================================================
-    # PRÜFE OB BEREITS INITIALISIERT
-    # ========================================================================
-    if PROXY_CONFIG.get('initialized', False):
-        logger.info("ℹ️  Proxy bereits initialisiert, verwende gespeicherte Einstellungen")
-        logger.info("=" * 70)
-        if PROXY_CONFIG['enabled']:
-            logger.info("Proxy-Konfiguration:")
-            logger.info(f"  Aktiver Proxy: {PROXY_CONFIG['active_proxy']}")
-            logger.info(f"  Proxy-URL: {PROXY_CONFIG['proxies']['http']}")
-            logger.info(f"  SSL-Verifikation: {'Deaktiviert' if not PROXY_CONFIG['verify_ssl'] else 'Aktiviert'}")
-            if PROXY_CONFIG.get('is_vpn'):
-                logger.info(f"  VPN-Verbindung: Erkannt")
-        else:
-            logger.info("Keine Proxy-Konfiguration erforderlich")
-        logger.info("=" * 70)
-        return
-    
-    # ========================================================================
-    # FÜHRE PROXY-TESTS DURCH (nur beim ersten Aufruf)
-    # ========================================================================
-    config = detect_proxy_requirement()
-    PROXY_CONFIG.update(config)
-    
-    logger.info("=" * 70)
-    if PROXY_CONFIG['enabled']:
-        logger.info("Proxy-Konfiguration:")
-        logger.info(f"  Aktiver Proxy: {PROXY_CONFIG['active_proxy']}")
-        logger.info(f"  Proxy-URL: {PROXY_CONFIG['proxies']['http']}")
-        logger.info(f"  SSL-Verifikation: {'Deaktiviert' if not PROXY_CONFIG['verify_ssl'] else 'Aktiviert'}")
-        if PROXY_CONFIG.get('is_vpn'):
-            logger.info(f"  VPN-Verbindung: Erkannt (SSL-Handling angepasst)")
-    else:
-        logger.info("Keine Proxy-Konfiguration erforderlich")
-    logger.info("=" * 70)
 
+    # Schnell-Check ohne Lock (häufiger Fall: bereits initialisiert)
+    if PROXY_CONFIG.get('initialized', False):
+        return
+
+    with _PROXY_INIT_LOCK:
+        # Nochmals prüfen — anderer Thread war evtl. schneller
+        if PROXY_CONFIG.get('initialized', False):
+            return
+
+        config = detect_proxy_requirement()
+        PROXY_CONFIG.update(config)
+
+        if PROXY_CONFIG['enabled']:
+            logger.info(
+                f"Proxy aktiv: {PROXY_CONFIG['active_proxy']} "
+                f"(SSL: {'deaktiviert' if not PROXY_CONFIG['verify_ssl'] else 'aktiv'})"
+            )
+            if PROXY_CONFIG.get('is_vpn'):
+                logger.info("VPN erkannt — SSL-Handling angepasst")
+        else:
+            logger.info("Direkte Verbindung (kein Proxy)")
 
 def get_session() -> requests.Session:
     """

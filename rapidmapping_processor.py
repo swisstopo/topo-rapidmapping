@@ -222,8 +222,15 @@ def process_mosaic_workflow(
 
 
 def process_photos_workflow(
-    input_dir, product_type, date, upload_enabled, environment, hostname
+    input_dir, product_type, date, upload_enabled, environment, hostname,
+    debug: bool = False,
 ):
+    import logging as _logging
+    if not debug:
+        for _mod in ['utilities.stac_publisher', 'utilities.credentials',
+                     'utilities.proxy_handler', 'main_multipart_upload_via_api',
+                     'util_publish_stac_fsdi', 'utilities.kml_generator']:
+            _logging.getLogger(_mod).setLevel(_logging.WARNING)
     """Workflow fuer Einzelbilder: Upload -> KML -> CSV.
 
     v2.2:
@@ -264,7 +271,8 @@ def process_photos_workflow(
             geocat_id=GEOCAT_ID,
             hostname=hostname,
             environment=environment,
-            upload_enabled=upload_enabled
+            upload_enabled=upload_enabled,
+            debug=debug,
         )
 
         if not result:
@@ -349,11 +357,12 @@ def process_photos_workflow(
                     f"{STAC_SCHEME}://{hostname}/{STAC_COLLECTION}"
                     f"/{kml_item_name}/{kml_item_name}.txt"
                 )
-                logger.info("\n" + "=" * 70)
-                logger.info(f"Naechster Schritt fuer {config['description']}")
-                logger.info(f"1) Karte: https://map.geo.admin.ch/#/map?layers=KML|{STAC_SCHEME}://{hostname}/{STAC_COLLECTION}/{kml_item_name}/{kml_asset_name}")
-                logger.info(f"2) Downloadliste (STAC): {csv_stac_url}")
-                logger.info("=" * 70)
+                # Links immer ausgeben — auch im non-debug Modus
+                print("\n" + "=" * 70)
+                print(f"✅ Nächster Schritt: {config['description']}")
+                print(f"🗺  Karte:  https://map.geo.admin.ch/#/map?layers=KML|{STAC_SCHEME}://{hostname}/{STAC_COLLECTION}/{kml_item_name}/{kml_asset_name}")
+                print(f"📥 Liste:  {csv_stac_url}")
+                print("=" * 70)
 
         return result['successful_uploads'] > 0
 
@@ -377,6 +386,7 @@ def main():
     )
     parser.add_argument('--upload', type=lambda x: x.lower() != 'false', default=True)
     parser.add_argument('--prod', action='store_true')
+    parser.add_argument('--debug', action='store_true', help='Debug-Modus: sequentielle Verarbeitung mit vollem Logging')
 
     args = parser.parse_args()
     environment = "PROD" if args.prod else "INT"
@@ -409,6 +419,7 @@ def main():
         print(f"  Produkttyp:     {product_type.value}")
         print(f"  Zeitstempel:    {timestamp_or_date}")
         print(f"  STAC Upload:    {'Aktiviert' if args.upload else 'Deaktiviert'}")
+        print(f"  Debug-Modus:    {'AN (sequentiell)' if args.debug else 'AUS (parallel)'}")
         if args.upload:
             print(f"  STAC Hostname:  {hostname}")
         print("=" * 70)
@@ -430,7 +441,8 @@ def main():
         else:
             success = process_photos_workflow(
                 input_dir, product_type, timestamp_or_date,
-                args.upload, environment, hostname
+                args.upload, environment, hostname,
+                debug=args.debug
             )
 
         print("\n" + "=" * 70)

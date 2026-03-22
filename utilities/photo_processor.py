@@ -642,11 +642,18 @@ def _assign_sequential_ms_offsets(
             # Eindeutiger Timestamp → Offset "00" (kein Burst)
             result[group[0]] = f"{ts_key}:00"
         else:
-            # Gruppe nach letzten zwei Ziffern des Stems sortieren
-            # z.B. "001_id111cL150156" → trailing digits "56"
+            # Gruppe nach id-Nummer im Dateinamen sortieren (NNN_idXXXcL...).
+            # WICHTIG: re.sub(r'[^0-9]', '', stem) würde den Kamerasuffix
+            # (150156/157/158) miteinbeziehen → alle gleich → Kollision.
+            # Stattdessen: id-Nummer direkt extrahieren.
             def _sort_key(p: Path) -> str:
-                digits = re.sub(r'[^0-9]', '', p.stem)
-                return digits[-2:] if len(digits) >= 2 else p.stem[-2:]
+                m = re.search(r'_id(\d+)', p.stem, re.IGNORECASE)
+                if m:
+                    return m.group(1).zfill(10)
+                # Fallback: Kamerasuffix entfernen, dann letzte Ziffern
+                stem_clean = re.sub(r'cL\d+$', '', p.stem, flags=re.IGNORECASE)
+                digits = re.sub(r'[^0-9]', '', stem_clean)
+                return digits[-6:].zfill(6) if digits else p.stem
 
             sorted_group = sorted(group, key=_sort_key)
 
@@ -673,7 +680,7 @@ def _decimal_to_dms_rational(decimal: float) -> List[Tuple[int, int]]:
     return [(deg, 1), (minutes, 1), (sec_num, 100)]
 
 
-def _write_minimal_exif_gps(jpg_path: Path, lat: float, lon: float, dt_str: Optional[str]) -> bool:
+def _write_minimal_exif_gps(jpg_path: Path, lat: float, lon: float, dt_str: Optional[str], verbose: bool = True) -> bool:
     """
     Schreibt GPS-EXIF + DateTimeOriginal direkt in ein JPEG (in-place).
 
@@ -769,9 +776,9 @@ def _write_minimal_exif_gps(jpg_path: Path, lat: float, lon: float, dt_str: Opti
             f.write(b'\xff\xd8' + app1_segment + rest)
 
         if dt_str:
-            logger.info(f"     ✓ EXIF geschrieben: lat={lat:.6f}, lon={lon:.6f}, dt={dt_exif}")
+            if verbose: logger.info(f"     ✓ EXIF geschrieben: lat={lat:.6f}, lon={lon:.6f}, dt={dt_exif}")
         else:
-            logger.info(f"     ✓ EXIF GPS geschrieben: lat={lat:.6f}, lon={lon:.6f} (kein Datum)")
+            if verbose: logger.info(f"     ✓ EXIF GPS geschrieben: lat={lat:.6f}, lon={lon:.6f} (kein Datum)")
         return True
 
     except Exception as e:
@@ -785,6 +792,7 @@ def convert_tif_to_jpg_with_exif(
     dt_str_override: Optional[str] = None,
     gdalinfo_text: Optional[str] = None,
     jpg_stem_override: Optional[str] = None,
+    verbose: bool = True,
 ) -> Optional[Path]:
     """
     Konvertiert ein georeferenziertes GeoTIFF (EBN/EBO) zu JPEG und schreibt
@@ -807,7 +815,7 @@ def convert_tif_to_jpg_with_exif(
     Returns:
         Path zum erzeugten JPEG oder None bei Fehler
     """
-    logger.info(f"  🔄 TIF→JPG Konvertierung: {tif_path.name}")
+    if verbose: logger.info(f"  🔄 TIF→JPG Konvertierung: {tif_path.name}")
 
     # ------------------------------------------------------------------
     # SCHRITT 1: gdalinfo – Koordinaten + Datum + Rotation
@@ -836,14 +844,14 @@ def convert_tif_to_jpg_with_exif(
     if lat is None or lon is None:
         logger.warning(f"     ⚠ Keine Center-Koordinaten gefunden – EXIF wird ohne GPS geschrieben")
     else:
-        logger.info(f"     ✓ Center: lat={lat:.6f}, lon={lon:.6f}")
+        if verbose: logger.info(f"     ✓ Center: lat={lat:.6f}, lon={lon:.6f}")
 
     # Timestamp: Override (mit ms-Offset) hat Vorrang vor TIFFTAG_DATETIME
     dt_str = dt_str_override if dt_str_override else _parse_tifftag_datetime(gdalinfo_text)
     if dt_str:
         base_ts = dt_str[:19]
         ms_part = dt_str[20:] if len(dt_str) > 19 else None
-        logger.info(f"     ✓ Datum: {base_ts}" + (f"  (ms-offset=:{ms_part})" if ms_part else ""))
+        if verbose: logger.info(f"     ✓ Datum: {base_ts}" + (f"  (ms-offset=:{ms_part})" if ms_part else ""))
     else:
         logger.warning(f"     ⚠ Kein TIFFTAG_DATETIME gefunden")
 
@@ -878,11 +886,11 @@ def convert_tif_to_jpg_with_exif(
             # HINWEIS: -a_ullr in gdal_translate ändert nur die Georeferenz-Metadaten,
             # nicht die tatsächliche Pixelreihenfolge im JPEG-Output. Deshalb gdalwarp.
             needs_gdalwarp = True
-            logger.info(f"     ↕ Nord-unten erkannt → 180° Flip via gdalwarp (Pixel-Reordering)")
+            if verbose: logger.info(f"     ↕ Nord-unten erkannt → 180° Flip via gdalwarp (Pixel-Reordering)")
         else:
             # Beliebiger Winkel → gdalwarp mit Reprojektion
             needs_gdalwarp = True
-            logger.info(f"     ↻ Rotation {rotation_deg:.1f}° erkannt → gdalwarp Reprojektion")
+            if verbose: logger.info(f"     ↻ Rotation {rotation_deg:.1f}° erkannt → gdalwarp Reprojektion")
 
     # Originale Pixelgrösse + geographisches Extent aus gdalinfo
     # (für dimensionstreues Flip via gdalwarp -te + -ts)
@@ -937,7 +945,7 @@ def convert_tif_to_jpg_with_exif(
                 _out_cols = max(1, round(_ext_x / _px_size_x))
                 _out_rows = max(1, round(_ext_y / _px_size_y))
                 ts_args = ['-ts', str(_out_cols), str(_out_rows)]
-                logger.info(f"     → Output-Größe: {_out_cols}×{_out_rows}px (Extent÷Pixelgrösse)")
+                if verbose: logger.info(f"     → Output-Größe: {_out_cols}×{_out_rows}px (Extent÷Pixelgrösse)")
         try:
             warp_result = subprocess.run(
                 [
@@ -968,11 +976,11 @@ def convert_tif_to_jpg_with_exif(
                 aux_file = jpg_path.with_suffix('.jpg.aux.xml')
                 if aux_file.exists():
                     aux_file.unlink()
-                logger.info(f"     ✓ JPEG erstellt (nord-oben): {jpg_path.name} ({jpg_path.stat().st_size // 1024} KB)")
+                if verbose: logger.info(f"     ✓ JPEG erstellt (nord-oben): {jpg_path.name} ({jpg_path.stat().st_size // 1024} KB)")
 
                 # SCHRITT 3: GPS-EXIF ins JPEG schreiben und fertig
                 if lat is not None and lon is not None:
-                    _write_minimal_exif_gps(jpg_path, lat, lon, dt_str)
+                    _write_minimal_exif_gps(jpg_path, lat, lon, dt_str, verbose=verbose)
                 else:
                     logger.warning(f"     ⚠ GPS-EXIF übersprungen (keine Koordinaten)")
                 return jpg_path
@@ -1013,9 +1021,9 @@ def convert_tif_to_jpg_with_exif(
             aux_file.unlink()
 
         if needs_gdalwarp:
-            logger.info(f"     ⚠ JPEG ohne Rotation erstellt (gdalwarp fehlgeschlagen): {jpg_path.name}")
+            if verbose: logger.info(f"     ⚠ JPEG ohne Rotation erstellt (gdalwarp fehlgeschlagen): {jpg_path.name}")
         else:
-            logger.info(f"     ✓ JPEG erstellt: {jpg_path.name} ({jpg_path.stat().st_size // 1024} KB)")
+            if verbose: logger.info(f"     ✓ JPEG erstellt: {jpg_path.name} ({jpg_path.stat().st_size // 1024} KB)")
 
     except subprocess.TimeoutExpired:
         logger.error(f"     ✗ gdal_translate Timeout")
@@ -1028,7 +1036,7 @@ def convert_tif_to_jpg_with_exif(
     # SCHRITT 3: GPS-EXIF ins JPEG schreiben
     # ------------------------------------------------------------------
     if lat is not None and lon is not None:
-        _write_minimal_exif_gps(jpg_path, lat, lon, dt_str)
+        _write_minimal_exif_gps(jpg_path, lat, lon, dt_str, verbose=verbose)
     else:
         logger.warning(f"     ⚠ GPS-EXIF übersprungen (keine Koordinaten)")
 
@@ -1488,21 +1496,27 @@ def process_individual_photos(
     geocat_id: str,
     hostname: str,
     environment: str,
-    upload_enabled: bool = True
+    upload_enabled: bool = True,
+    debug: bool = False,
 ) -> Optional[Dict]:
     """
     Verarbeitet alle Photos in einem Verzeichnis.
 
-    NEU v2.2: Die TIF-Vorverarbeitung nutzt convert_tif_files_in_directory
-    mit eingebautem Timestamp-Dedup (sequentielle ms-Offsets), Burst-Frame-
-    Filterung (nur 1 Bild pro Timestamp) und nord-oben Normalisierung.
+    Args:
+        debug: True → sequentielle Verarbeitung mit vollem Logging (für Debugging).
+               False → parallele Konvertierung + Upload (Produktion, Standard).
 
-    Die EXIF-Timestamp-Extraktion via extract_exif_data() liest den
-    ms-Offset-suffix ("YYYY:MM:DD HH:MM:SS:NN") direkt aus dem JPEG-EXIF;
-    parse_exif_timestamp() wandelt ihn korrekt in den Item-Namen um.
+    NEU v2.3: Parallele Verarbeitung via ThreadPoolExecutor wenn debug=False.
     """
     try:
         temp_dir = output_dir / "temp_photos"
+
+        # Überreste früherer Läufe entfernen — verhindert WinError 183
+        # (Datei existiert bereits) und 409-Fehler durch verwaiste Worker-Dirs.
+        if temp_dir.exists():
+            logger.info(f"  Bereinige temp-Verzeichnis: {temp_dir}")
+            import shutil as _shutil
+            _shutil.rmtree(temp_dir, ignore_errors=True)
         temp_dir.mkdir(parents=True, exist_ok=True)
 
         if upload_enabled:
@@ -1666,170 +1680,168 @@ def process_individual_photos(
         logger.info(f"  Temp-Verzeichnis: {temp_dir}")
 
         # ====================================================================
-        # PHASE 2: Haupt-Loop — eine Datei nach der anderen
-        # TIF: konvertieren → umbenennen → Thumbnail → Upload → sofort löschen
-        # JPEG: Thumbnail → Upload → sofort löschen
+        # PHASE 2: Verarbeitung + Upload
+        # debug=True  → sequentiell, volles Logging (Debugging)
+        # debug=False → parallel, ThreadPoolExecutor (Produktion)
         # ====================================================================
-        logger.info("\n" + "=" * 70)
-        logger.info("VERARBEITE PHOTOS MIT DIREKTEM UPLOAD")
-        logger.info("=" * 70)
 
-        photos = []
-        missing_gps = 0
-        successful_uploads = 0
+        # Per-Item-Lock: verhindert 409-Kollision wenn zwei Worker dasselbe
+        # item_name gleichzeitig hochladen (z.B. bei identischen Timestamps).
+        import threading as _threading
+        _upload_locks: dict = {}
+        _locks_mutex  = _threading.Lock()
 
-        for idx, work in enumerate(work_items, 1):
+        def _get_item_lock(name: str) -> _threading.Lock:
+            with _locks_mutex:
+                if name not in _upload_locks:
+                    _upload_locks[name] = _threading.Lock()
+                return _upload_locks[name]
+
+        # Per-Datei-Verarbeitungsfunktion (wird sequentiell oder parallel aufgerufen)
+        def _process_one(work: Dict, idx: int, total: int) -> Dict:
+            """Konvertiert, erstellt Thumbnail und lädt eine Datei hoch."""
             source_path = work['source_path']
-            logger.info(f"\n[{idx}/{total}] {source_path.name}")
-            logger.info("-" * 70)
+            log_prefix  = f"[{idx}/{total}] {source_path.name}"
+
+            if debug:
+                logger.info(f"\n{log_prefix}")
+                logger.info("-" * 70)
 
             try:
+                # Worker-Verzeichnis sofort anlegen — alle Dateien dieses Workers
+                # landen hier, vollständig isoliert von anderen Workers.
+                # (asset_name = item_name, bekannt für TIF-Modus aus work_items)
+                _worker_asset = work.get('item_name') or work['jpg_stem']
+                worker_dir = temp_dir / f"_worker_{_worker_asset}"
+                worker_dir.mkdir(exist_ok=True)
+
                 if work['is_tif']:
-                    # ----------------------------------------------------------
-                    # SCHRITT 1+2 (TIF): konvertieren direkt in temp_dir
-                    # ----------------------------------------------------------
-                    logger.info("  1️⃣  Konvertiere TIF → JPEG...")
+                    if debug: logger.info("  1️⃣  Konvertiere TIF → JPEG...")
                     jpg_result = convert_tif_to_jpg_with_exif(
                         tif_path=source_path,
-                        output_dir=temp_dir,
+                        output_dir=worker_dir,
                         quality=85,
                         dt_str_override=work['effective_ts'] or None,
                         gdalinfo_text=work['gdalinfo_text'] or None,
                         jpg_stem_override=work['jpg_stem'],
+                        verbose=debug,
                     )
                     if jpg_result is None:
-                        logger.error(f"     ✗ Konvertierung fehlgeschlagen, überspringe")
-                        photos.append({'source_path': source_path, 'error': 'conversion failed',
-                                       'photo_upload_success': False, 'thumbnail_upload_success': False})
-                        continue
+                        logger.error(f"{log_prefix}: ✗ Konvertierung fehlgeschlagen")
+                        return {'source_path': source_path, 'error': 'conversion failed',
+                                'photo_upload_success': False, 'thumbnail_upload_success': False,
+                                'lat': None, 'lon': None}
 
                     jpg_file   = jpg_result
                     item_name  = work['item_name']
                     asset_name = item_name
-
-                    # GPS aus EXIF lesen (wurde von convert_tif_to_jpg_with_exif geschrieben)
                     lat, lon, exif_timestamp = extract_exif_data(jpg_file)
-                    if lat is None or lon is None:
-                        missing_gps += 1
-                    else:
-                        logger.info(f"     ✓ GPS: {lat:.6f}, {lon:.6f}")
+                    if debug:
+                        if lat: logger.info(f"     ✓ GPS: {lat:.6f}, {lon:.6f}")
+                        else:   logger.warning("     ⚠ Keine GPS-Daten")
 
                 else:
-                    # ----------------------------------------------------------
-                    # SCHRITT 1 (JPEG): EXIF lesen
-                    # ----------------------------------------------------------
-                    logger.info("  1️⃣  Extrahiere EXIF-Daten (gdalinfo)...")
+                    if debug: logger.info("  1️⃣  Extrahiere EXIF-Daten (gdalinfo)...")
                     jpg_file = source_path
                     lat, lon, exif_timestamp = extract_exif_data(jpg_file)
-
-                    if lat is None or lon is None:
-                        logger.warning(f"     ⚠ Keine GPS-Daten gefunden")
-                        missing_gps += 1
-                    else:
-                        logger.info(f"     ✓ GPS: {lat:.6f}, {lon:.6f}")
-                    if exif_timestamp:
-                        logger.info(f"     ✓ Zeitstempel: {exif_timestamp}")
-
+                    if debug:
+                        if lat: logger.info(f"     ✓ GPS: {lat:.6f}, {lon:.6f}")
+                        else:   logger.warning("     ⚠ Keine GPS-Daten")
                     timestamp  = parse_exif_timestamp(exif_timestamp, jpg_file.name)
                     item_name  = generate_item_name(timestamp, product_type)
                     asset_name = item_name
 
-                logger.info(f"  2️⃣  Item-Name: {item_name}")
+                if debug: logger.info(f"  2️⃣  Item-Name: {item_name}")
 
-                # SCHRITT 3: Umbenennen / sicherstellen dass Datei item_name trägt
-                temp_photo_path = temp_dir / (asset_name + '.jpg')
+                # Photo in worker_dir ablegen
+                temp_photo_path = worker_dir / (asset_name + '.jpg')
                 if work['is_tif']:
-                    # Datei ist bereits in temp_dir — ggf. umbenennen wenn stem abweicht
                     if jpg_file != temp_photo_path:
-                        jpg_file.rename(temp_photo_path)
+                        jpg_file.replace(temp_photo_path)  # replace() works even if dst exists (Windows-safe)
                         jpg_file = temp_photo_path
                 else:
-                    logger.info(f"  3️⃣  Kopiere und benenne Foto um...")
                     shutil.copy2(jpg_file, temp_photo_path)
-                logger.info(f"     ✓ Foto: {temp_photo_path.name}")
+                if debug: logger.info(f"     ✓ Foto: {temp_photo_path.name}")
 
-                # SCHRITT 4: Thumbnail erstellen
-                logger.info(f"  4️⃣  Erstelle Thumbnail (gdal_translate)...")
-                temp_thumbnail_path = temp_dir / "thumbnail.jpg"
-
+                # Thumbnail in worker_dir (Dateiname thumbnail.jpg bleibt fix
+                # damit get_published_photo_urls es korrekt herausfiltern kann)
+                temp_thumbnail_path = worker_dir / "thumbnail.jpg"
+                if debug: logger.info("  4️⃣  Erstelle Thumbnail...")
                 thumbnail_success = resize_image_gdal(
-                    temp_photo_path,
-                    temp_thumbnail_path,
+                    temp_photo_path, temp_thumbnail_path,
                     max_width=THUMBNAIL_CONFIG['max_width'],
                     max_height=THUMBNAIL_CONFIG['max_height']
                 )
-
-                if thumbnail_success:
-                    logger.info(f"     ✓ Thumbnail: {temp_thumbnail_path.stat().st_size} bytes")
-                else:
-                    logger.warning(f"     ⚠ Thumbnail fehlgeschlagen")
+                if not thumbnail_success:
+                    if debug: logger.warning("     ⚠ Thumbnail fehlgeschlagen")
                     temp_thumbnail_path = None
+                elif debug:
+                    logger.info(f"     ✓ Thumbnail: {temp_thumbnail_path.stat().st_size} bytes")
 
-                # SCHRITT 5 & 6: Upload
+                # Upload
                 photo_upload_success     = False
                 thumbnail_upload_success = False
 
                 if upload_enabled:
-                    logger.info(f"  5️⃣  Lade Foto zu STAC hoch...")
-                    photo_upload_success = publish_to_stac_wrapper(
-                        asset_path=temp_photo_path,
-                        item_name=item_name,
-                        collection=stac_collection,
-                        geocat_id=geocat_id,
-                        hostname=hostname,
-                        asset_title=product_config['asset_title'],
-                        environment=environment
-                    )
-
-                    if photo_upload_success:
-                        logger.info(f"     ✓ Foto hochgeladen")
-                    else:
-                        logger.error(f"     ✗ Foto-Upload fehlgeschlagen")
-
-                    if photo_upload_success and temp_thumbnail_path and temp_thumbnail_path.exists():
-                        logger.info(f"  6️⃣  Lade Thumbnail zu STAC hoch...")
-                        thumbnail_upload_success = publish_to_stac_wrapper(
-                            asset_path=temp_thumbnail_path,
+                    # Lock pro item_name: verhindert 409-Kollision wenn zwei Worker
+                    # denselben item_name gleichzeitig hochladen würden.
+                    _item_lock = _get_item_lock(item_name)
+                    with _item_lock:
+                        if debug: logger.info("  5️⃣  Lade Foto zu STAC hoch...")
+                        photo_upload_success = publish_to_stac_wrapper(
+                            asset_path=temp_photo_path,
                             item_name=item_name,
                             collection=stac_collection,
                             geocat_id=geocat_id,
                             hostname=hostname,
-                            asset_title="THUMBNAIL",
+                            asset_title=product_config['asset_title'],
                             environment=environment
                         )
+                        if debug:
+                            if photo_upload_success: logger.info("     ✓ Foto hochgeladen")
+                            else: logger.error("     ✗ Foto-Upload fehlgeschlagen")
 
-                        if thumbnail_upload_success:
-                            logger.info(f"     ✓ Thumbnail hochgeladen")
-                        else:
-                            logger.warning(f"     ⚠ Thumbnail-Upload fehlgeschlagen")
+                        if photo_upload_success and temp_thumbnail_path and temp_thumbnail_path.exists():
+                            if debug: logger.info("  6️⃣  Lade Thumbnail zu STAC hoch...")
+                            thumbnail_upload_success = publish_to_stac_wrapper(
+                                asset_path=temp_thumbnail_path,
+                                item_name=item_name,
+                                collection=stac_collection,
+                                geocat_id=geocat_id,
+                                hostname=hostname,
+                                asset_title="THUMBNAIL",
+                                environment=environment
+                            )
+                            if debug:
+                                if thumbnail_upload_success: logger.info("     ✓ Thumbnail hochgeladen")
+                                else: logger.warning("     ⚠ Thumbnail-Upload fehlgeschlagen")
 
                     if photo_upload_success:
-                        successful_uploads += 1
                         temp_photo_path.unlink(missing_ok=True)
                         if temp_thumbnail_path and temp_thumbnail_path.exists():
                             temp_thumbnail_path.unlink(missing_ok=True)
-
+                        try:
+                            worker_dir.rmdir()
+                        except Exception:
+                            pass
                 else:
-                    logger.info(f"  ℹ️  Upload deaktiviert - Dateien in {temp_dir}")
+                    if debug: logger.info("  ℹ️  Upload deaktiviert")
 
-                # SCHRITT 7: Zur Liste hinzufügen
-                photo_info = {
-                    'original_path': source_path,
-                    'temp_photo_path': temp_photo_path,
-                    'temp_thumbnail_path': temp_thumbnail_path if thumbnail_success else None,
-                    'item_name': item_name,
-                    'asset_name': asset_name,
-                    'original_filename': source_path.name,
-                    'lat': lat,
-                    'lon': lon,
-                    'timestamp': exif_timestamp,
-                    'photo_upload_success': photo_upload_success,
-                    'thumbnail_upload_success': thumbnail_upload_success
-                }
-                photos.append(photo_info)
+                if photo_upload_success and thumbnail_upload_success:
+                    status = "✅ OK"
+                elif photo_upload_success:
+                    status = "⚠️  OK (Thumbnail fehlgeschlagen)"
+                else:
+                    status = "❌ UPLOAD FEHLGESCHLAGEN"
 
-                logger.info("-" * 70)
-                if upload_enabled:
+                if not debug:
+                    # Im Produktionsmodus: kompakte Zeile — Fehler immer, Erfolg immer
+                    if photo_upload_success:
+                        logger.info(f"{log_prefix}: {status}")
+                    else:
+                        logger.error(f"{log_prefix}: {status}")
+                elif upload_enabled:
+                    logger.info("-" * 70)
                     if photo_upload_success and thumbnail_upload_success:
                         logger.info(f"✅ [{idx}/{total}] VOLLSTÄNDIG ERFOLGREICH")
                     elif photo_upload_success:
@@ -1839,18 +1851,132 @@ def process_individual_photos(
                 else:
                     logger.info(f"✅ [{idx}/{total}] VERARBEITUNG ERFOLGREICH (kein Upload)")
 
+                return {
+                    'source_path': source_path,
+                    'temp_photo_path': temp_photo_path,
+                    'temp_thumbnail_path': temp_thumbnail_path if thumbnail_success else None,
+                    'item_name': item_name,
+                    'asset_name': asset_name,
+                    'original_filename': source_path.name,
+                    'lat': lat,
+                    'lon': lon,
+                    'timestamp': exif_timestamp,
+                    'photo_upload_success': photo_upload_success,
+                    'thumbnail_upload_success': thumbnail_upload_success,
+                }
+
             except Exception as e:
                 logger.error(f"\n❌ FEHLER bei {source_path.name}: {e}")
-                import traceback
-                traceback.print_exc()
-
-                photos.append({
-                    'original_path': source_path,
+                import traceback as _tb
+                logger.error(_tb.format_exc() if debug else str(e))
+                return {
+                    'source_path': source_path,
                     'original_filename': source_path.name,
                     'error': str(e),
                     'photo_upload_success': False,
-                    'thumbnail_upload_success': False
-                })
+                    'thumbnail_upload_success': False,
+                    'lat': None, 'lon': None,
+                }
+
+        # --- Ausführung: sequentiell (debug) oder parallel ---
+        logger.info("\n" + "=" * 70)
+        if debug:
+            logger.info("VERARBEITE PHOTOS — DEBUG-MODUS (sequentiell)")
+        else:
+            n_proc = min(8, max(2, total))
+            logger.info(f"VERARBEITE PHOTOS — PARALLEL ({n_proc} Workers)")
+        logger.info("=" * 70)
+
+        # Im Produktionsmodus: noisy Unter-Module auf WARNING setzen.
+        # print()-Ausgaben von util_publish_stac_fsdi werden via _QuietStdout
+        # unterdrückt (nur ERROR-Level-Meldungen werden durchgelassen).
+        _noisy_modules = [
+            'utilities.stac_publisher',
+            'utilities.credentials',
+            'utilities.proxy_handler',
+            'main_multipart_upload_via_api',
+            'util_publish_stac_fsdi',
+        ]
+        _saved_levels = {}
+        if not debug:
+            import logging as _logging
+            for _mod in _noisy_modules:
+                _lg = _logging.getLogger(_mod)
+                _saved_levels[_mod] = _lg.level
+                _lg.setLevel(_logging.WARNING)
+
+        import io, sys as _sys
+
+        class _QuietStdout(io.TextIOBase):
+            """Filtert stdout: lässt nur Zeilen durch die Fehler-Keywords enthalten."""
+            _ERROR_KW = ('error', 'fehler', '✗', 'failed', 'exception',
+                         'traceback', 'critical', '❌')
+            def __init__(self, orig): self._orig = orig
+            def write(self, s):
+                if not s or not s.strip(): return len(s)
+                sl = s.lower()
+                if any(kw in sl for kw in self._ERROR_KW):
+                    return self._orig.write(s)
+                return len(s)  # silently drop
+            def flush(self): self._orig.flush()
+
+        _orig_stdout = _sys.stdout
+        if not debug:
+            _sys.stdout = _QuietStdout(_orig_stdout)
+
+        photos = []
+        successful_uploads = 0
+        missing_gps = 0
+
+        if debug:
+            # Sequentiell — jede Datei einzeln mit vollem Logging
+            for idx, work in enumerate(work_items, 1):
+                result = _process_one(work, idx, total)
+                photos.append(result)
+                if result.get('photo_upload_success'): successful_uploads += 1
+                if result.get('lat') is None:          missing_gps += 1
+
+        else:
+            # Parallel — mehrere Dateien gleichzeitig konvertieren + hochladen
+            from concurrent.futures import ThreadPoolExecutor, as_completed as _as_completed
+            import multiprocessing as _mp, time as _time
+            n_proc = min(8, max(2, _mp.cpu_count() or 2))
+
+            # Proxy VOR dem Start der Worker initialisieren, damit alle Worker
+            # die bereits fertige Konfiguration vorfinden und nicht 8×
+            # gleichzeitig Proxy-Tests ausführen (→ 409-Kollisionen).
+            try:
+                from utilities.proxy_handler import initialize_proxy as _init_proxy
+                _init_proxy()
+            except Exception:
+                pass
+
+            with ThreadPoolExecutor(max_workers=n_proc) as executor:
+                future_to_idx = {}
+                for idx, work in enumerate(work_items, 1):
+                    future_to_idx[executor.submit(_process_one, work, idx, total)] = idx
+                    # Kleiner Versatz zwischen den ersten Starts damit Worker 1
+                    # die Proxy-Session aufbaut bevor Worker 2 beginnt.
+                    if idx <= n_proc:
+                        _time.sleep(0.3)
+                done = 0
+                for future in _as_completed(future_to_idx):
+                    result = future.result()
+                    photos.append(result)
+                    if result.get('photo_upload_success'): successful_uploads += 1
+                    if result.get('lat') is None:          missing_gps += 1
+                    done += 1
+                    if done % max(1, total // 10) == 0 or done == total:
+                        logger.info(f"  Fortschritt: {done}/{total} "
+                                    f"({successful_uploads} erfolgreich hochgeladen)")
+
+        # Logging-Level und stdout wiederherstellen
+        if not debug:
+            _sys.stdout = _orig_stdout
+        if not debug and _saved_levels:
+            import logging as _logging
+            for _mod, _lvl in _saved_levels.items():
+                _logging.getLogger(_mod).setLevel(_lvl if _lvl != 0 else _logging.NOTSET)
 
         # ====================================================================
         # ZUSAMMENFASSUNG

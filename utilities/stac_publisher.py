@@ -65,9 +65,9 @@ def publish_to_stac_wrapper(
         bool: True bei Erfolg, False bei Fehler
     """
     try:
-        logger.info("=" * 70)
-        logger.info(f"STAC PUBLIKATION ({environment})")
-        logger.info("=" * 70)
+        logger.debug("=" * 70)
+        logger.debug(f"STAC PUBLIKATION ({environment})")
+        logger.debug("=" * 70)
         
         # ====================================================================
         # PROXY-KONFIGURATION AUS PROXY_HANDLER HOLEN
@@ -86,7 +86,7 @@ def publish_to_stac_wrapper(
         # ====================================================================
         # CREDENTIALS LADEN
         # ====================================================================
-        logger.info("Lade Credentials...")
+        logger.debug("Lade Credentials...")
         username, password, _ = load_stac_credentials(environment=environment)
         
         # ====================================================================
@@ -99,13 +99,13 @@ def publish_to_stac_wrapper(
         # ====================================================================
         # ZUSAMMENFASSUNG
         # ====================================================================
-        logger.info(f"Asset: {asset_path.name}")
-        logger.info(f"Item: {item_name}")
-        logger.info(f"Collection: {collection}")
-        logger.info(f"Hostname: {hostname}")
+        logger.debug(f"Asset: {asset_path.name}")
+        logger.debug(f"Item: {item_name}")
+        logger.debug(f"Collection: {collection}")
+        logger.debug(f"Hostname: {hostname}")
         if asset_title:
-            logger.info(f"Title: {asset_title}")
-        logger.info("=" * 70)
+            logger.debug(f"Title: {asset_title}")
+        logger.debug("=" * 70)
         
         # ====================================================================
         # STAC-PUBLIKATION
@@ -133,10 +133,10 @@ def publish_to_stac_wrapper(
         # ERGEBNIS
         # ====================================================================
         if success:
-            logger.info("=" * 70)
-            logger.info("✓ STAC-Publikation erfolgreich")
-            logger.info(f"URL: {scheme}://{hostname}/{collection}/{item_name}/{asset_path.name}")
-            logger.info("=" * 70)
+            logger.debug("=" * 70)
+            logger.debug("✓ STAC-Publikation erfolgreich")
+            logger.debug(f"URL: {scheme}://{hostname}/{collection}/{item_name}/{asset_path.name}")
+            logger.debug("=" * 70)
         else:
             logger.error("=" * 70)
             logger.error("✗ STAC-Publikation fehlgeschlagen")
@@ -184,9 +184,9 @@ def verify_stac_item_exists(
         exists = response.status_code == 200
         
         if exists:
-            logger.info(f"  ℹ Asset existiert bereits: {url}")
+            logger.debug(f"  ℹ Asset existiert bereits: {url}")
         else:
-            logger.info(f"  ℹ Asset existiert noch nicht")
+            logger.debug(f"  ℹ Asset existiert noch nicht")
         
         return exists
         
@@ -221,23 +221,23 @@ def batch_publish_assets(
     results = {}
     total = len(assets)
     
-    logger.info(f"\nBatch-Upload: {total} Assets")
-    logger.info("=" * 70)
+    logger.debug(f"\nBatch-Upload: {total} Assets")
+    logger.debug("=" * 70)
     
     # Zeige Proxy-Status einmal am Anfang
     proxy_config = get_proxy_config()
     if proxy_config.get('enabled', False):
-        logger.info(f"Verwende Proxy: {proxy_config.get('active_proxy')}")
+        logger.debug(f"Verwende Proxy: {proxy_config.get('active_proxy')}")
     else:
-        logger.info("Verwende direkte Verbindung (kein Proxy)")
-    logger.info("=" * 70)
+        logger.debug("Verwende direkte Verbindung (kein Proxy)")
+    logger.debug("=" * 70)
     
     for idx, asset_info in enumerate(assets, 1):
         asset_path = asset_info['path']
         item_name = asset_info['item_name']
         asset_title = asset_info.get('title')
         
-        logger.info(f"\n[{idx}/{total}] {asset_path.name}")
+        logger.debug(f"\n[{idx}/{total}] {asset_path.name}")
         
         # publish_to_stac_wrapper verwendet automatisch proxy_handler
         success = publish_to_stac_wrapper(
@@ -259,10 +259,10 @@ def batch_publish_assets(
     successful = sum(1 for v in results.values() if v)
     failed = total - successful
     
-    logger.info("\n" + "=" * 70)
-    logger.info(f"Batch-Upload abgeschlossen: {successful}/{total} erfolgreich")
+    logger.debug("\n" + "=" * 70)
+    logger.debug(f"Batch-Upload abgeschlossen: {successful}/{total} erfolgreich")
     if failed > 0:
         logger.warning(f"  ⚠ {failed} fehlgeschlagen")
-    logger.info("=" * 70)
+    logger.debug("=" * 70)
     
     return results

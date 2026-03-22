@@ -35,6 +35,183 @@ logger = logging.getLogger(__name__)
 
 
 # ==============================================================================
+# SCHNELLER TIFF-HEADER-PARSER (kein gdalinfo-Subprocess nötig)
+# Liest nur die ersten 64KB jeder Datei — drastisch schneller auf Netzlaufwerken
+# ==============================================================================
+
+def _fast_read_tiff_geodata(path: Path) -> dict:
+    """
+    Liest GeoTIFF-Metadaten direkt aus dem TIFF-Header — kein gdalinfo-Subprocess.
+    Liest maximal 64KB pro Datei. Gibt {} bei Fehler zurück.
+
+    Unterstützt:
+      - Classic TIFF (magic=42) und BigTIFF (magic=43)
+      - Little-Endian (II) und Big-Endian (MM)
+      - ModelTransformationTag (34264): vollständige Affin-Matrix inkl. Rotation
+      - ModelPixelScale (33550) + ModelTiepoint (33922): einfache Nord-oben-Bilder
+
+    Returns dict mit Schlüsseln:
+      width, height   int
+      datetime        str  "YYYY:MM:DD HH:MM:SS"
+      geotransform    tuple (origin_x, px_w, row_rot, origin_y, col_rot, px_h)
+    """
+    try:
+        with open(path, 'rb') as f:
+            raw = f.read(65536)
+
+        if len(raw) < 8:
+            return {}
+
+        if raw[:2] == b'II':   bo = '<'
+        elif raw[:2] == b'MM': bo = '>'
+        else: return {}
+
+        magic = struct.unpack_from(bo + 'H', raw, 2)[0]
+
+        if magic == 43:       # BigTIFF
+            if len(raw) < 16: return {}
+            ifd_offset = struct.unpack_from(bo + 'Q', raw, 8)[0]
+            entry_size = 20
+            is_big = True
+        elif magic == 42:     # Classic TIFF
+            ifd_offset = struct.unpack_from(bo + 'I', raw, 4)[0]
+            entry_size = 12
+            is_big = False
+        else:
+            return {}
+
+        if ifd_offset + 2 > len(raw):
+            return {}
+
+        n_entries = struct.unpack_from(bo + 'H', raw, ifd_offset)[0]
+        if n_entries > 2000:
+            return {}
+
+        # IFD-Einträge parsen
+        tags = {}
+        base = ifd_offset + 2
+        for i in range(n_entries):
+            pos = base + i * entry_size
+            if pos + entry_size > len(raw):
+                break
+            if is_big:
+                tag, dtype, count = struct.unpack_from(bo + 'HHQ', raw, pos)
+                val_off = struct.unpack_from(bo + 'Q', raw, pos + 12)[0]
+            else:
+                tag, dtype, count = struct.unpack_from(bo + 'HHI', raw, pos)
+                val_off = struct.unpack_from(bo + 'I', raw, pos + 8)[0]
+            tags[tag] = (dtype, count, val_off)
+
+        def read_doubles(count, val_off):
+            size = count * 8
+            inline = 8 if is_big else 4
+            if size <= inline:
+                packed = struct.pack(bo + ('Q' if is_big else 'I'), val_off)
+                data = packed[:size]
+            else:
+                if val_off + size > len(raw):
+                    return None
+                data = raw[val_off:val_off + size]
+            return struct.unpack_from(bo + str(count) + 'd', data)
+
+        def read_ascii(count, val_off):
+            inline = 8 if is_big else 4
+            if count <= inline:
+                packed = struct.pack(bo + ('Q' if is_big else 'I'), val_off)
+                return packed[:count].decode('ascii', errors='ignore').rstrip('\x00 ')
+            if val_off + count > len(raw):
+                return None
+            return raw[val_off:val_off + count].decode('ascii', errors='ignore').rstrip('\x00 ')
+
+        def read_long(val_off):
+            return val_off  # stored inline for count=1
+
+        result = {}
+
+        # ImageWidth (256), ImageLength (257)
+        for tag, key in [(256, 'width'), (257, 'height')]:
+            if tag in tags:
+                result[key] = tags[tag][2] & 0xFFFFFFFF  # inline value
+
+        # DateTime (306)
+        if 306 in tags:
+            dtype, count, val_off = tags[306]
+            v = read_ascii(count, val_off)
+            if v:
+                result['datetime'] = v.strip()
+
+        # GeoTransform — ModelTransformationTag (34264) hat Vorrang (unterstützt Rotation)
+        if 34264 in tags:
+            dtype, count, val_off = tags[34264]
+            v = read_doubles(count, val_off)
+            if v and len(v) >= 16:
+                # 4×4-Matrix row-major: [Mxx, Mxy, Mxz, Tx,  Myx, Myy, Myz, Ty, ...]
+                # GeoTransform: (origin_x, px_w, row_rot, origin_y, col_rot, px_h)
+                #              = (Tx,       Mxx,  Mxy,    Ty,       Myx,     Myy)
+                #              = (v[3],    v[0], v[1],   v[7],    v[4],    v[5])
+                result['geotransform'] = (v[3], v[0], v[1], v[7], v[4], v[5])
+
+        if 'geotransform' not in result and 33550 in tags and 33922 in tags:
+            scale = read_doubles(tags[33550][1], tags[33550][2])
+            tp    = read_doubles(tags[33922][1], tags[33922][2])
+            if scale and tp and len(scale) >= 2 and len(tp) >= 6:
+                result['geotransform'] = (tp[3], scale[0], 0.0, tp[4], 0.0, -scale[1])
+
+        return result
+
+    except Exception:
+        return {}
+
+
+def _fast_tiff_to_gdalinfo_text(path: Path) -> str:
+    """
+    Synthetisiert einen minimalen gdalinfo-ähnlichen Text aus dem schnellen
+    TIFF-Header-Parser. Wird als Ersatz für den gdalinfo-Subprocess verwendet.
+
+    Der resultierende Text enthält nur die Felder die vom Rest des Codes
+    benötigt werden: GeoTransform, Size, TIFFTAG_DATETIME, Corner Coordinates.
+    """
+    data = _fast_read_tiff_geodata(path)
+    if not data:
+        return ''
+
+    lines = []
+
+    if 'width' in data and 'height' in data:
+        lines.append(f"Size is {data['width']}, {data['height']}")
+
+    if 'datetime' in data:
+        lines.append(f"  TIFFTAG_DATETIME={data['datetime']}")
+
+    gt = data.get('geotransform')
+    if gt and 'width' in data and 'height' in data:
+        ox, pw, rr, oy, cr, ph = gt
+        w, h = data['width'], data['height']
+        lines.append("GeoTransform =")
+        lines.append(f"  {ox}, {pw}, {rr}")
+        lines.append(f"  {oy}, {cr}, {ph}")
+
+        # Corner Coordinates aus GeoTransform berechnen
+        def corner(col, row):
+            return ox + pw * col + rr * row, oy + cr * col + ph * row
+
+        ul = corner(0, 0)
+        ll = corner(0, h)
+        lr = corner(w, h)
+        ur = corner(w, 0)
+        lines.append("Corner Coordinates:")
+        lines.append(f"Upper Left  ( {ul[0]:.7f},  {ul[1]:.7f})")
+        lines.append(f"Lower Left  ( {ll[0]:.7f},  {ll[1]:.7f})")
+        lines.append(f"Lower Right ( {lr[0]:.7f},  {lr[1]:.7f})")
+        lines.append(f"Upper Right ( {ur[0]:.7f},  {ur[1]:.7f})")
+        cx = (ul[0] + lr[0]) / 2
+        cy = (ul[1] + lr[1]) / 2
+        lines.append(f"Center      ( {cx:.7f},  {cy:.7f})")
+
+    return '\n'.join(lines)
+
+
+# ==============================================================================
 # TIF → JPEG KONVERTIERUNG (NEU v2.1)
 # ==============================================================================
 
@@ -207,27 +384,22 @@ def _rotate_to_north_up(jpg_path: Path, angle_deg: float, quality: int = 85) -> 
 
 # ==============================================================================
 # NEU v2.3 — MINIMALE DATEIAUSWAHL FÜR FLÄCHENDECKUNG (Greedy Set Cover)
+# Exakte Polygon-Footprints aus Corner Coordinates — korrekt für gedrehte Bilder
 # ==============================================================================
 
-def _parse_bbox_from_gdalinfo(gdalinfo_output: str) -> Optional[Tuple[float, float, float, float]]:
+def _parse_footprint_from_gdalinfo(gdalinfo_output: str) -> Optional[List[Tuple[float, float]]]:
     """
-    Extrahiert die Bounding Box (xmin, ymin, xmax, ymax) aus allen 4 Eckpunkt-
-    Koordinaten in gdalinfo-Output. Verwendet Corner Coordinates für maximale
-    Genauigkeit auch bei gedrehten Bildern.
-
-    gdalinfo gibt Koordinaten in (lon, lat) aus:
-      Upper Left  (  lon,  lat)
-      Lower Left  (  lon,  lat)
-      Upper Right (  lon,  lat)
-      Lower Right (  lon,  lat)
+    Extrahiert den exakten Polygon-Footprint (4 Eckpunkte) aus gdalinfo-Output.
+    Verwendet die 4 Corner Coordinates (lon, lat) direkt — korrekt für gedrehte
+    Bilder, da die Ecken im Geographischen Raum angegeben werden.
 
     Returns:
-        (xmin, ymin, xmax, ymax) in WGS84-Dezimalgrad, oder None
+        Liste von 4 (lon, lat) Punkten im CCW-Uhrzeigersinn, oder None
     """
-    pattern = r'(?:Upper Left|Lower Left|Upper Right|Lower Right)\s+\(\s*([\-\d\.]+),\s*([\-\d\.]+)\)'
+    pattern = r'(Upper Left|Lower Left|Lower Right|Upper Right)\s+\(\s*([\-\d\.]+),\s*([\-\d\.]+)\)'
     matches = re.findall(pattern, gdalinfo_output)
     if len(matches) < 4:
-        # Fallback: aus GeoTransform + Bildgrösse berechnen
+        # Fallback: BBox aus GeoTransform
         gt_m = re.search(
             r'GeoTransform\s*=\s*'
             r'([\-\d\.e\+]+),\s*([\-\d\.e\+]+),\s*([\-\d\.e\+]+)\s*\n'
@@ -237,108 +409,70 @@ def _parse_bbox_from_gdalinfo(gdalinfo_output: str) -> Optional[Tuple[float, flo
         sz_m = re.search(r'Size is (\d+), (\d+)', gdalinfo_output)
         if not (gt_m and sz_m):
             return None
-        ox, pw, rr = float(gt_m.group(1)), float(gt_m.group(2)), float(gt_m.group(3))
-        oy, cr, ph = float(gt_m.group(4)), float(gt_m.group(5)), float(gt_m.group(6))
-        cols, rows = int(sz_m.group(1)), int(sz_m.group(2))
-        xs = [ox + pw*c + rr*r for c, r in [(0,0),(cols,0),(0,rows),(cols,rows)]]
-        ys = [oy + cr*c + ph*r for c, r in [(0,0),(cols,0),(0,rows),(cols,rows)]]
-        return (min(xs), min(ys), max(xs), max(ys))
+        ox,pw,rr = float(gt_m.group(1)),float(gt_m.group(2)),float(gt_m.group(3))
+        oy,cr,ph = float(gt_m.group(4)),float(gt_m.group(5)),float(gt_m.group(6))
+        cols,rows = int(sz_m.group(1)),int(sz_m.group(2))
+        return [(ox,oy),(ox+pw*cols,oy+cr*cols),
+                (ox+pw*cols+rr*rows,oy+cr*cols+ph*rows),(ox+rr*rows,oy+ph*rows)]
 
-    xs = [float(m[0]) for m in matches]
-    ys = [float(m[1]) for m in matches]
-    return (min(xs), min(ys), max(xs), max(ys))
-
-
-def _bbox_union_area(bboxes: List[Tuple[float, float, float, float]]) -> float:
-    """
-    Berechnet die Fläche der Vereinigung von achsenparallelen Rechtecken.
-    Verwendet Sweep-Line-Algorithmus: O(n² log n), exakt, keine Näherung.
-
-    Args:
-        bboxes: Liste von (xmin, ymin, xmax, ymax)
-
-    Returns:
-        Fläche in Quadrat-Dezimalgrad (nur für relative Vergleiche verwendet)
-    """
-    if not bboxes:
-        return 0.0
-
-    ys = sorted(set(y for b in bboxes for y in (b[1], b[3])))
-    total = 0.0
-
-    for i in range(len(ys) - 1):
-        y0, y1 = ys[i], ys[i + 1]
-        dy = y1 - y0
-        if dy <= 0:
-            continue
-        # x-Intervalle aller Boxen die diesen y-Streifen überdecken
-        intervals = sorted(
-            (b[0], b[2]) for b in bboxes if b[1] <= y0 and b[3] >= y1
-        )
-        # Intervalle zusammenführen und x-Länge summieren
-        cx0 = cx1 = None
-        covered_x = 0.0
-        for x0, x1 in intervals:
-            if cx0 is None:
-                cx0, cx1 = x0, x1
-            elif x0 <= cx1:
-                cx1 = max(cx1, x1)
-            else:
-                covered_x += cx1 - cx0
-                cx0, cx1 = x0, x1
-        if cx0 is not None:
-            covered_x += cx1 - cx0
-        total += covered_x * dy
-
-    return total
+    # Build dict: label → (lon, lat)
+    corners = {m[0]: (float(m[1]), float(m[2])) for m in matches}
+    # CCW order: UL → LL → LR → UR
+    order = ['Upper Left', 'Lower Left', 'Lower Right', 'Upper Right']
+    poly = [corners[k] for k in order if k in corners]
+    return poly if len(poly) == 4 else None
 
 
-def _select_by_strip(
-    tif_files: List[Path],
-) -> Optional[List[Path]]:
+def _polygon_area_signed(verts: List[Tuple[float, float]]) -> float:
+    """Signed shoelace area. Positive = CCW."""
+    n = len(verts); area = 0.0
+    for i in range(n):
+        j = (i+1)%n
+        area += verts[i][0]*verts[j][1] - verts[j][0]*verts[i][1]
+    return area / 2.0
+
+
+def _ensure_ccw(poly: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
+    return list(reversed(poly)) if _polygon_area_signed(poly) < 0 else list(poly)
+
+
+def _point_in_convex_ccw(px: float, py: float, ccw_poly: List[Tuple[float, float]]) -> bool:
+    """Test if point is inside CCW convex polygon."""
+    n = len(ccw_poly)
+    for i in range(n):
+        x1,y1 = ccw_poly[i]; x2,y2 = ccw_poly[(i+1)%n]
+        if (x2-x1)*(py-y1) - (y2-y1)*(px-x1) < -1e-10:
+            return False
+    return True
+
+
+def _select_by_strip(tif_files: List[Path]) -> Optional[List[Path]]:
     """
     Erkennt das DMC-4 Dateinamen-Muster NNN_idXXXcLYYYYYY.tif und wählt
     pro Flugstreifen (NNN) genau eine Kameraposition aus.
-
     Kamera-Priorität: 150157 (Nadir-Mitte) > 150158 > 150156
-
-    Returns:
-        Liste der ausgewählten Dateien, oder None wenn Muster nicht erkannt.
+    Returns: ausgewählte Dateien, oder None wenn Muster nicht erkannt.
     """
     from collections import defaultdict
-
-    PATTERN        = re.compile(r'^(\d+)_id\d+cL(\d+)\.tif$', re.IGNORECASE)
-    CAMERA_PRIO    = ['150157', '150158', '150156']
-
+    PATTERN     = re.compile(r'^(\d+)_id\d+cL(\d+)\.tif$', re.IGNORECASE)
+    CAMERA_PRIO = ['150157', '150158', '150156']
     strips: dict = defaultdict(list)
     unmatched = 0
-
     for tif in tif_files:
         m = PATTERN.match(tif.name)
-        if m:
-            strips[int(m.group(1))].append({'path': tif, 'camera': m.group(2)})
-        else:
-            unmatched += 1
-
-    # Nur anwenden wenn mindestens 80% der Dateien dem Muster entsprechen
+        if m: strips[int(m.group(1))].append({'path': tif, 'camera': m.group(2)})
+        else: unmatched += 1
     if unmatched > len(tif_files) * 0.2:
         return None
-
     selected: List[Path] = []
     for strip_num in sorted(strips.keys()):
         files_in_strip = strips[strip_num]
         if len(files_in_strip) == 1:
             selected.append(files_in_strip[0]['path'])
         else:
-            # Bevorzuge Kamera mit höchster Priorität
-            chosen = None
             for cam in CAMERA_PRIO:
                 chosen = next((f['path'] for f in files_in_strip if f['camera'] == cam), None)
-                if chosen:
-                    break
-            if chosen:
-                selected.append(chosen)
-
+                if chosen: selected.append(chosen); break
     logger.info(
         f"  Streifen-Muster erkannt: {len(strips)} Streifen × bis zu 3 Kameras "
         f"→ {len(selected)} Dateien (eine pro Streifen)"
@@ -346,121 +480,112 @@ def _select_by_strip(
     return selected
 
 
-
 def select_minimal_coverage_files(
     tif_files: List[Path],
     gdalinfo_cache: Dict[Path, str],
-    coverage_threshold: float = 0.95,
-) -> Tuple[List[Path], Dict[Path, Tuple[float, float, float, float]]]:
+    coverage_threshold: float = 0.99,
+    grid_resolution: int = 300,
+) -> Tuple[List[Path], Dict[Path, List[Tuple[float, float]]]]:
     """
-    Wählt die minimale Anzahl TIF-Dateien aus, die zusammen mindestens
-    coverage_threshold des Gesamtgebiets abdecken.
+    Wählt die minimale Anzahl TIF-Dateien aus, die ≥coverage_threshold des
+    Gesamtgebiets abdecken. Verwendet exakte Polygon-Footprints (Corner
+    Coordinates aus gdalinfo) — korrekt für beliebig gedrehte Bilder.
 
-    Algorithmus: Greedy Set Cover auf Bounding-Box-Basis
-      1. Bounding Boxes aller Dateien aus gdalinfo-Cache extrahieren
-      2. Gesamtfläche (Union aller BBs) berechnen
-      3. Iterativ die Datei auswählen, die den größten noch nicht abgedeckten
-         Bereich hinzufügt, bis Schwellenwert erreicht
+    Algorithmus: Greedy Set Cover via Gitter-Sampling
+      1. Polygon-Footprint jeder Datei aus gdalinfo extrahieren
+      2. Gesamtgitter auf Union aller Footprints aufspannen
+      3. Für jedes Gitterpunkt: welche Polygone decken ihn ab? (Vorberechnung)
+      4. Iterativ das Polygon wählen, das die meisten noch unbedeckten Punkte hinzufügt
+      5. Stopp wenn coverage_threshold erreicht
 
-    WICHTIG — AABB-Überabschätzung:
-      Die Bounding Boxes sind achsenparallele Rechtecke (AABB). Für gedrehte
-      Bilder (z.B. 90°) überschätzt die AABB die tatsächliche Pixelfläche.
-      Deshalb ist der Standard-Schwellenwert 95% (nicht 98% oder 100%),
-      um zu vermeiden dass echte Randstreifen versehentlich weggelassen werden.
-
-    Dateien ohne parsbare BB werden immer eingeschlossen (safe fallback).
+    Komplexität: O(N × R²) Vorberechnung + O(K × (N-K)) Greedy, wobei
+    N=Anzahl Dateien, R=Gitterauflösung, K=Anzahl ausgewählter Dateien.
 
     Args:
         tif_files:          Sortierte Liste aller TIF-Dateien
         gdalinfo_cache:     {tif_path: gdalinfo_text}
-        coverage_threshold: Abdeckungsgrad (Standard 0.95 = 95%)
+        coverage_threshold: Abdeckungsgrad (Standard 0.99 = 99%)
+        grid_resolution:    Gitterauflösung (300 = 90000 Punkte)
 
     Returns:
-        (selected_files, bbox_map)
-        selected_files: Ausgewählte Dateien (original Sortierreihenfolge)
-        bbox_map:       {tif_path: (xmin, ymin, xmax, ymax)} für alle Dateien
+        (selected_files, footprint_map)
     """
-    # Schnellpfad: DMC-4 Streifen-Muster erkennen (NNN_idXXXcLYYYYYY.tif)
-    # → garantiert lückenlose Abdeckung ohne AABB-Überabschätzungsproblem
-    strip_selection = _select_by_strip(tif_files)
-    if strip_selection is not None:
-        skipped = len(tif_files) - len(strip_selection)
-        logger.info(f"  ✓ Streifen-Auswahl: {len(strip_selection)} von {len(tif_files)} "
-                    f"({skipped} übersprungen — doppelte Kameraspuren)")
-        bbox_map_out = {}
-        for tif in tif_files:
-            bb = _parse_bbox_from_gdalinfo(gdalinfo_cache.get(tif, ''))
-            if bb:
-                bbox_map_out[tif] = bb
-        return strip_selection, bbox_map_out
-
-    # Fallback: Greedy Set Cover auf AABB-Basis (für unbekannte Dateinamen-Schemata)
-    logger.info("  Kein Streifen-Muster erkannt → Greedy Set Cover (AABB 95%)...")
-
-    # Bounding Boxes extrahieren
-    bbox_map: Dict[Path, Optional[Tuple[float, float, float, float]]] = {}
-    no_bbox:  List[Path] = []
-
+    # Footprints extrahieren
+    fp_map:  Dict[Path, List[Tuple[float, float]]] = {}
+    no_fp:   List[Path] = []
     for tif in tif_files:
-        bb = _parse_bbox_from_gdalinfo(gdalinfo_cache.get(tif, ''))
-        if bb is not None:
-            bbox_map[tif] = bb
+        fp = _parse_footprint_from_gdalinfo(gdalinfo_cache.get(tif, ''))
+        if fp is not None:
+            fp_map[tif] = _ensure_ccw(fp)
         else:
-            no_bbox.append(tif)
-            logger.warning(f"  ⚠ Keine BBox für {tif.name} — wird immer eingeschlossen")
+            no_fp.append(tif)
+            logger.warning(f"  ⚠ Kein Footprint für {tif.name} — wird immer eingeschlossen")
 
-    parseable = [t for t in tif_files if t in bbox_map]
-
+    parseable = [t for t in tif_files if t in fp_map]
     if not parseable:
-        logger.warning("  ⚠ Keine Bounding Boxes verfügbar — alle Dateien werden verarbeitet")
-        return tif_files, {t: bbox_map[t] for t in tif_files if t in bbox_map}
+        return tif_files, fp_map
 
-    all_bboxes  = [bbox_map[t] for t in parseable]
-    total_area  = _bbox_union_area(all_bboxes)
+    polys = [fp_map[t] for t in parseable]
 
-    if total_area <= 0:
-        return tif_files, bbox_map
+    # Gitter aufspannen
+    all_x = [p[0] for poly in polys for p in poly]
+    all_y = [p[1] for poly in polys for p in poly]
+    xmin,xmax = min(all_x),max(all_x)
+    ymin,ymax = min(all_y),max(all_y)
+    R = grid_resolution
+    dx = (xmax-xmin)/R; dy = (ymax-ymin)/R
 
-    selected:         List[Path]                              = []
-    covered_bboxes:   List[Tuple[float, float, float, float]] = []
-    remaining:        List[Path]                              = list(parseable)
-    current_coverage: float                                   = 0.0
+    # Vorberechnung: Gitterpunkte pro Polygon (als frozenset von (i,j))
+    logger.info(f"  Greedy Set Cover: {len(parseable)} Polygone, {R}×{R} Gitter...")
+    poly_cells: List[set] = []
+    for poly in polys:
+        cells = set()
+        # Bounding box des Polygons im Gitter
+        px_vals = [p[0] for p in poly]; py_vals = [p[1] for p in poly]
+        i0 = max(0, int((min(px_vals)-xmin)/dx))
+        i1 = min(R-1, int((max(px_vals)-xmin)/dx)+1)
+        j0 = max(0, int((min(py_vals)-ymin)/dy))
+        j1 = min(R-1, int((max(py_vals)-ymin)/dy)+1)
+        for i in range(i0, i1+1):
+            for j in range(j0, j1+1):
+                cx = xmin+(i+0.5)*dx; cy = ymin+(j+0.5)*dy
+                if _point_in_convex_ccw(cx, cy, poly):
+                    cells.add((i,j))
+        poly_cells.append(cells)
 
-    logger.info(f"  Gesamtfläche: {total_area:.8f} sq.deg | Ziel: ≥{coverage_threshold:.0%}")
+    # Gesamtzahl Gitterpunkte in der Union
+    total_cells = len(set().union(*poly_cells)) if poly_cells else 0
+    if total_cells == 0:
+        return tif_files, fp_map
 
-    while remaining and current_coverage < coverage_threshold:
-        best_tif      = None
-        best_new_area = -1.0
+    # Greedy-Schleife
+    covered:    set       = set()
+    selected:   List[int] = []
+    remaining:  List[int] = list(range(len(parseable)))
 
-        for tif in remaining:
-            candidate_area = _bbox_union_area(covered_bboxes + [bbox_map[tif]])
-            added = candidate_area - _bbox_union_area(covered_bboxes)
-            if added > best_new_area:
-                best_new_area = added
-                best_tif      = tif
-
-        if best_tif is None:
+    while remaining and len(covered) / total_cells < coverage_threshold:
+        best_i = max(remaining, key=lambda i: len(poly_cells[i] - covered))
+        best_new = len(poly_cells[best_i] - covered)
+        if best_new == 0:
             break
-
-        selected.append(best_tif)
-        remaining.remove(best_tif)
-        covered_bboxes.append(bbox_map[best_tif])
-        current_coverage = _bbox_union_area(covered_bboxes) / total_area
-
+        selected.append(best_i)
+        remaining.remove(best_i)
+        covered |= poly_cells[best_i]
+        coverage = len(covered) / total_cells
         logger.info(
-            f"  + {best_tif.name}  "
-            f"(+{best_new_area/total_area:.1%} → gesamt {current_coverage:.1%})"
+            f"  + {parseable[best_i].name}  "
+            f"(+{best_new/total_cells:.1%} → gesamt {coverage:.1%})"
         )
 
+    final_coverage = len(covered) / total_cells if total_cells else 1.0
     skipped = len(parseable) - len(selected)
     logger.info(
         f"  ✓ Auswahl: {len(selected)} von {len(tif_files)} Dateien "
-        f"({skipped} übersprungen, {current_coverage:.1%} Abdeckung)"
+        f"({skipped} übersprungen, {final_coverage:.1%} Abdeckung)"
     )
 
-    # Dateien ohne BB immer anhängen
-    final_selection = selected + no_bbox
-    return final_selection, {t: bbox_map[t] for t in tif_files if t in bbox_map}
+    result_files = [parseable[i] for i in selected] + no_fp
+    return result_files, fp_map
 
 
 # ==============================================================================
@@ -1385,18 +1510,22 @@ def process_individual_photos(
 
         # ====================================================================
         # PHASE 1: Arbeitsliste aufbauen
-        # TIF-Modus: gdalinfo + ms-Offsets für alle Dateien vorab berechnen
+        # TIF-Modus: Dateiauswahl + gdalinfo parallel
         # JPEG-Modus: Dateien direkt aus input_dir
-        # Keine Konvertierung hier — nur Metadaten + geplante Dateinamen.
         # ====================================================================
         is_tif_mode = False
         work_items: List[Dict] = []
 
         if product_type in [ProductType.EBN, ProductType.EBO]:
-            tif_files = sorted(
-                p for p in input_dir.iterdir()
-                if p.is_file() and p.suffix.lower() in {'.tif', '.tiff'}
-            )
+            logger.info("  Lese Verzeichnis...")
+            tif_files_raw = []
+            for i, p in enumerate(input_dir.iterdir(), 1):
+                if p.suffix.lower() in {'.tif', '.tiff'} and p.is_file():
+                    tif_files_raw.append(p)
+                if i % 500 == 0:
+                    logger.info(f"  Verzeichnis: {i} Einträge gelesen, {len(tif_files_raw)} TIFs...")
+            tif_files = sorted(tif_files_raw)
+            logger.info(f"  ✓ Verzeichnis gelesen: {len(tif_files)} TIF-Dateien gefunden")
 
             if tif_files:
                 is_tif_mode = True
@@ -1404,47 +1533,88 @@ def process_individual_photos(
                 logger.info(f"TIF-MODUS: {len(tif_files)} Datei(en) — Scan, dann einzeln konvertieren")
                 logger.info("=" * 70)
 
-                # gdalinfo für alle TIFs einmalig (gecacht)
-                logger.info("  Scanne Timestamps (gdalinfo)...")
-                gdalinfo_cache: Dict[Path, str] = {}
-                for tif in tif_files:
-                    try:
-                        r = subprocess.run(
-                            ['gdalinfo', str(tif)],
-                            capture_output=True, text=True, timeout=30,
-                            env={**os.environ, 'GDAL_PAM_ENABLED': 'NO'}
-                        )
-                        gdalinfo_cache[tif] = r.stdout if r.returncode == 0 else ''
-                        if r.returncode != 0:
-                            logger.warning(f"  ⚠ gdalinfo fehlgeschlagen: {tif.name}")
-                    except Exception as e:
-                        logger.warning(f"  ⚠ gdalinfo Fehler {tif.name}: {e}")
-                        gdalinfo_cache[tif] = ''
+                # ----------------------------------------------------------------
+                # Schneller Scan: direktes TIFF-Header-Parsing (kein subprocess).
+                # Liest nur 64KB pro Datei → auf Netzwerklaufwerken ~2-10ms/Datei
+                # statt 500-2000ms für gdalinfo. Für 2391 Dateien: ~12s statt 8min.
+                # gdalinfo wird nur als Fallback für unlesbare Dateien aufgerufen.
+                # ----------------------------------------------------------------
+                from concurrent.futures import ThreadPoolExecutor, as_completed
+                import multiprocessing, time as _time
 
-                # ms-Offsets zuweisen
+                logger.info(f"  Scanne {len(tif_files)} Dateien (schneller Header-Parser)...")
+                t_scan_start = _time.time()
+
+                gdalinfo_cache: Dict[Path, str] = {}
+                fallback_needed: List[Path] = []
+                total        = len(tif_files)
+                log_interval = max(1, min(100, total // 20))
+
+                # Schneller Pfad: paralleles TIFF-Header-Parsing
+                n_workers = min(32, max(4, (multiprocessing.cpu_count() or 4) * 4))
+
+                def _scan_fast(tif: Path) -> tuple:
+                    text = _fast_tiff_to_gdalinfo_text(tif)
+                    return tif, text
+
+                completed = 0
+                with ThreadPoolExecutor(max_workers=n_workers) as executor:
+                    futures = {executor.submit(_scan_fast, tif): tif for tif in tif_files}
+                    logger.info(f"  {total} Aufträge gestartet...")
+                    for future in as_completed(futures):
+                        tif, text = future.result()
+                        if text:
+                            gdalinfo_cache[tif] = text
+                        else:
+                            fallback_needed.append(tif)
+                        completed += 1
+                        if completed % log_interval == 0 or completed == total:
+                            elapsed = _time.time() - t_scan_start
+                            rate    = completed / elapsed if elapsed > 0 else 0
+                            eta     = (total - completed) / rate if rate > 0 else 0
+                            logger.info(
+                                f"  Scan: {completed}/{total}"
+                                f"  ({rate:.0f}/s, ETA {eta:.0f}s)"
+                            )
+
+                # Fallback: gdalinfo für Dateien die nicht geparst werden konnten
+                if fallback_needed:
+                    logger.info(f"  gdalinfo-Fallback für {len(fallback_needed)} Dateien...")
+                    scan_env = {**os.environ, 'GDAL_PAM_ENABLED': 'NO'}
+                    for tif in fallback_needed:
+                        try:
+                            r = subprocess.run(
+                                ['gdalinfo', str(tif)],
+                                capture_output=True, text=True, timeout=60,
+                                env=scan_env
+                            )
+                            gdalinfo_cache[tif] = r.stdout if r.returncode == 0 else ''
+                        except Exception:
+                            gdalinfo_cache[tif] = ''
+
+                elapsed_total = _time.time() - t_scan_start
+                logger.info(
+                    f"  ✓ Scan abgeschlossen: {total} Dateien in {elapsed_total:.1f}s"
+                    f"  ({len(fallback_needed)} via gdalinfo-Fallback)"
+                )
+
+                # ms-Offsets für alle Dateien (stabile Nummerierung)
                 ts_with_offset = _assign_sequential_ms_offsets(tif_files, gdalinfo_cache)
 
                 # ----------------------------------------------------------------
-                # NEU v2.3: Minimale Dateiauswahl für Flächendeckung
-                # Wählt die kleinste Teilmenge aus, die ≥95% des Gesamtgebiets
-                # abdeckt (AABB-Basis, 95% wegen Überabschätzung bei gedrehten
-                # Bildern — echte Randstreifen werden so nicht versehentlich
-                # weggelassen).
+                # Greedy Polygon Set Cover — exakte Footprints, keine AABB
                 # ----------------------------------------------------------------
-                logger.info("  Berechne minimale Dateiauswahl (Greedy Set Cover, AABB 95%)...")
+                logger.info("  Berechne minimale Dateiauswahl (Greedy Polygon Set Cover, 99%)...")
                 selected_tifs, _ = select_minimal_coverage_files(
                     tif_files=tif_files,
                     gdalinfo_cache=gdalinfo_cache,
-                    coverage_threshold=0.95,
+                    coverage_threshold=0.99,
                 )
-                # Reihenfolge beibehalten (original sort, nicht Greedy-Reihenfolge)
                 selected_set = set(selected_tifs)
                 tif_files_to_process = [t for t in tif_files if t in selected_set]
                 dropped = [t for t in tif_files if t not in selected_set]
                 if dropped:
-                    logger.info(f"  Übersprungen ({len(dropped)} Dateien mit >95% Überlappung):")
-                    for t in dropped:
-                        logger.info(f"    ⏭ {t.name}")
+                    logger.info(f"  Übersprungen: {len(dropped)} Dateien (vollständig durch andere abgedeckt)")
 
                 # Arbeitsliste aufbauen (noch keine Konvertierung)
                 for tif in tif_files_to_process:

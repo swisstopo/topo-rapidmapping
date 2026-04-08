@@ -61,10 +61,10 @@ class ProductType(Enum):
 def get_product_config(product_type: ProductType) -> Dict[str, Any]:
     """
     Gibt die Konfiguration für einen Produkttyp zurück.
-    
+
     Args:
         product_type (ProductType): Produkttyp
-        
+
     Returns:
         Dict: Konfiguration mit Keys: suffix, asset_title, description, icon_url, icon_scale
     """
@@ -102,31 +102,32 @@ def get_product_config(product_type: ProductType) -> Dict[str, Any]:
             'type': 'photos'
         }
     }
-    
+
     return configs[product_type]
 
 
 def validate_timestamp(timestamp: str) -> bool:
     """
     Validiert Zeitstempel im Format YYYY-MM-DDthhmmss.
-    
+
     Args:
         timestamp (str): Zu validierender Zeitstempel
-        
+
     Returns:
         bool: True wenn gültig, False sonst
-        
+
     Examples:
         >>> validate_timestamp("2024-07-15t143000")
         True
         >>> validate_timestamp("2024-13-01t000000")
         False
     """
-    pattern = r'^\d{4}-\d{2}-\d{2}t\d{6}$'
-    
+    # Accept 6-digit (hhmmss) or 8-digit (hhmmsscc) time parts
+    pattern = r'^\d{4}-\d{2}-\d{2}t\d{6}(\d{2})?$'
+
     if not re.match(pattern, timestamp):
         return False
-    
+
     # Extrahiere Komponenten
     try:
         date_part, time_part = timestamp.split('t')
@@ -134,7 +135,7 @@ def validate_timestamp(timestamp: str) -> bool:
         hour = int(time_part[0:2])
         minute = int(time_part[2:4])
         second = int(time_part[4:6])
-        
+
         # Validiere Bereiche
         if not (1900 <= year <= 2100):
             return False
@@ -148,72 +149,81 @@ def validate_timestamp(timestamp: str) -> bool:
             return False
         if not (0 <= second <= 59):
             return False
-        
+
         return True
-        
+
     except (ValueError, IndexError):
         return False
 
 
+def ensure_hundredths_suffix(timestamp: str) -> str:
+    """
+    Ensures timestamp has 2-digit hundredths-of-seconds suffix.
+    "2024-07-15t143000"     ->  "2024-07-15t14300000"
+    "2024-07-15t14300000"   ->  "2024-07-15t14300000"  (unchanged)
+    """
+    import re as _re
+    if _re.match(r'^\d{4}-\d{2}-\d{2}t\d{6}$', timestamp):
+        return timestamp + "00"
+    return timestamp
+
+
 def generate_item_name(timestamp: str, product_type: ProductType) -> str:
     """
-    Generiert STAC Item Name.
-    
-    Format: ram-YYYY-MM-DDthhmmss-{product}
-    Beispiel: ram-2024-07-15t143000-qdop-rgb
-    
+    Generiert STAC Item Name: ram-YYYY-MM-DDthhmmsscc.
+
+    Alle Produkttypen verwenden das gleiche Format ohne Produktsuffix.
+    Das Produktsuffix erscheint nur im Asset-Namen (generate_asset_name).
+
     Args:
-        timestamp (str): Zeitstempel (YYYY-MM-DDthhmmss)
-        product_type (ProductType): Produkttyp
-        
+        timestamp (str): Zeitstempel (YYYY-MM-DDthhmmss oder YYYY-MM-DDthhmmsscc)
+        product_type (ProductType): Produkttyp (unbenutzt, für API-Kompatibilität)
+
     Returns:
-        str: Item Name (lowercase)
-        
+        str: Item Name (lowercase), z.B. 'ram-2024-07-15t14300000'
+
     Examples:
         >>> generate_item_name("2024-07-15t143000", ProductType.QDOP_RGB)
-        'ram-2024-07-15t143000-qdop-rgb'
-        >>> generate_item_name("2024-07-15t143000", ProductType.EBN)
-        'ram-2024-07-15t143000-ebn'
+        'ram-2024-07-15t14300000'
+        >>> generate_item_name("2024-07-15t14300000", ProductType.EBN)
+        'ram-2024-07-15t14300000'
+        >>> generate_item_name("2024-07-15t14300000", ProductType.EBO)
+        'ram-2024-07-15t14300000'
     """
-    config = get_product_config(product_type)
-    # Suffix enthält bereits den Typ (z.B. "qdop-rgb-mosaic", "ebn")
-    # Für Item-Name: Nur Produkt ohne "-mosaic"
-    product_name = config['suffix'].replace('-mosaic', '')
-    return f"{PREFIX}-{timestamp.lower()}-{product_name}"
+    ts = ensure_hundredths_suffix(timestamp).lower()
+    return f"{PREFIX}-{ts}"
 
 
 def generate_asset_name(timestamp: str, product_type: ProductType) -> str:
     """
-    Generiert STAC Asset Name (Dateiname).
-    
-    Format: ram-YYYY-MM-DDthhmmss-{product}-{type}.ext
-    Beispiel: ram-2024-07-15t143000-qdop-rgb-mosaic.tif
-    
+    Generiert STAC Asset Name (Dateiname) mit Hundertelsekunden-Suffix.
+
+    Format: ram-YYYY-MM-DDthhmmsscc-{suffix}.ext
+    Beispiele:
+      ram-2024-07-15t14300000-qdop-rgb-mosaic.tif
+      ram-2024-07-15t14300000-qdop-nrg-mosaic.tif
+      ram-2024-07-15t14300000-ebn-photo.jpg
+
     Args:
-        timestamp (str): Zeitstempel (YYYY-MM-DDthhmmss)
+        timestamp (str): Zeitstempel (YYYY-MM-DDthhmmss oder YYYY-MM-DDthhmmsscc)
         product_type (ProductType): Produkttyp
-        
+
     Returns:
         str: Asset Name (mit Extension)
-        
-    Examples:
-        >>> generate_asset_name("2024-07-15t143000", ProductType.QDOP_RGB)
-        'ram-2024-07-15t143000-qdop-rgb-mosaic.tif'
-        >>> generate_asset_name("2024-07-15t143000", ProductType.EBN)
-        'ram-2024-07-15t143000-ebn.jpg'
     """
+    ts = ensure_hundredths_suffix(timestamp).lower()
     config = get_product_config(product_type)
-    return f"{PREFIX}-{timestamp.lower()}-{config['suffix']}{config['file_extension']}"
+    return f"{PREFIX}-{ts}-{config['suffix']}{config['file_extension']}"
 
 
 def get_collection_url(item_name: str, hostname: str = None) -> str:
     """
     Generiert Collection-URL für ein Item.
-    
+
     Args:
         item_name (str): STAC Item Name
         hostname (str, optional): STAC Hostname (default: STAC_HOSTNAME)
-        
+
     Returns:
         str: Vollständige URL zur Collection
     """
@@ -224,15 +234,15 @@ def get_collection_url(item_name: str, hostname: str = None) -> str:
 def validate_item_name_format(item_name: str) -> bool:
     """
     Validiert Item Name Format für Einzelbilder (YYYY-###-CAPITALLETTERS).
-    
+
     Nur relevant für alternative Namensschemas bei Einzelbildern.
-    
+
     Args:
         item_name (str): Zu validierender Item Name
-        
+
     Returns:
         bool: True wenn gültig, False sonst
-        
+
     Examples:
         >>> validate_item_name_format("2024-001-WALLIS")
         True

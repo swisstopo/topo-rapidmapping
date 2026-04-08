@@ -11,7 +11,7 @@ import logging
 import main_multipart_upload_via_api
 from utilities import photo_processor
 from configuration import (
-    ProductType, 
+    ProductType,
     get_product_config,
     STAC_COLLECTION,
     GEOCAT_ID,
@@ -69,30 +69,30 @@ def get_credentials(args_username=None, args_password=None, config_path=None):
     1. Command-line arguments
     2. Environment variables
     3. Config file
-    
+
     Args:
         args_username (str): Username from command-line args
         args_password (str): Password from command-line args
         config_path (str): Path to config file
-    
+
     Returns:
         tuple: (username, password)
     """
     username = None
     password = None
-    
+
     # Priority 1: Command-line arguments
     if args_username and args_password:
         username = args_username
         password = args_password
         logging.info("Using credentials from command-line arguments")
-    
+
     # Priority 2: Environment variables
     elif os.environ.get('STAC_USERNAME') and os.environ.get('STAC_PASSWORD'):
         username = os.environ.get('STAC_USERNAME')
         password = os.environ.get('STAC_PASSWORD')
         logging.info("Using credentials from environment variables")
-    
+
     # Priority 3: Config file
     elif config_path and os.path.exists(config_path):
         try:
@@ -100,7 +100,7 @@ def get_credentials(args_username=None, args_password=None, config_path=None):
             logging.info(f"Using credentials from config file: {config_path}")
         except Exception as e:
             logging.error(f"Failed to load credentials from config file: {e}")
-    
+
     if not username or not password:
         raise ValueError(
             "Credentials not found. Please provide credentials via:\n"
@@ -108,7 +108,7 @@ def get_credentials(args_username=None, args_password=None, config_path=None):
             "  2. Environment variables (STAC_USERNAME and STAC_PASSWORD)\n"
             "  3. Config file (--config-path or default: secrets/int_stac.json)"
         )
-    
+
     return username, password
 
 
@@ -123,29 +123,32 @@ def is_existing(stac_item_path):
 
 
 def item_create_json_payload(id, coordinates, dt_iso8601, title, geocat_id, current, stac_hostname, asset):
-    """Create JSON payload for a STAC item."""
+    """Create JSON payload for a STAC item.
+
+    Product type is detected from the asset filename so that item titles
+    can be plain item IDs (e.g. 'ram-2025-07-10t08002801') without any
+    collection prefix or product suffix.
+    """
     domain = f"https://{stac_hostname}/"
+    asset_lower = asset.lower()
+    id_lower = id.lower()
 
-    pattern = r'_\d{4}-\d{2}-\d{2}t\d{5}$'
-
-    # Remove the date pattern
-    cleaned = re.sub(pattern, '', title)
-
-    # Create the product name with prefix
-    product = f'ch.swisstopo.{cleaned}'
-
-    # Check if the 'cleaned' variable contains the specific substring
-    if "-ebo-photo-overview" in cleaned:
-        # Use the generic camera icon (Purple color: 127,0,255)
+    # Determine preview thumbnail / icon from the asset filename.
+    # Individual photo assets contain the product suffix (e.g. '-ebn-photo.jpg').
+    # Overview KML assets end with '.kml'; QDOP TIF assets contain '-qdop-'.
+    if "-ebo-photo" in asset_lower:
         config = get_product_config(ProductType.EBO)
         thumbnail_url = config['icon_url']
-
-    elif "-ebn-photo-overview" in cleaned:
-        # Use the generic camera icon (Purple color: 127,0,255)
+    elif "-ebn-photo" in asset_lower:
+        config = get_product_config(ProductType.EBN)
+        thumbnail_url = config['icon_url']
+    elif asset_lower.endswith('.kml') and 'overview' in id_lower:
+        # Overview item: default to EBN icon (product cannot be derived from
+        # new item naming that omits the product suffix)
         config = get_product_config(ProductType.EBN)
         thumbnail_url = config['icon_url']
     else:
-        # Use the specific generated thumbnail
+        # QDOP mosaic or any other asset — use the generated thumbnail
         thumbnail_url = f"{domain}{STAC_COLLECTION}/{id}/thumbnail.jpg"
 
     # Build base links
@@ -156,15 +159,15 @@ def item_create_json_payload(id, coordinates, dt_iso8601, title, geocat_id, curr
         }
     ]
 
-    # Only add COG visual link if cleaned contains "-qdop-"
-    if "-qdop-" in cleaned:
+    # COG visual link for QDOP mosaic assets
+    if "-qdop-" in asset_lower:
         links.insert(0, {
             "href": f"https://map.geo.admin.ch/#/map?layers=COG|{domain}{STAC_COLLECTION}/{id}/{asset}",
             "rel": "visual"
         })
-    
-    # Only add KML visual link if cleaned contains "-photo-overview"
-    if "-photo-overview" in cleaned:
+
+    # KML visual link for overview items
+    if asset_lower.endswith('.kml'):
         links.insert(0, {
             "href": f"https://map.geo.admin.ch/#/map?layers=KML|{domain}{STAC_COLLECTION}/{id}/{asset}",
             "rel": "visual"
@@ -216,7 +219,7 @@ def asset_create_json_payload(id, asset_type, current, asset_title=None):
         title = asset_title
     else:
         title = asset_create_title(id_no_path, current)
-   
+
     if asset_type == "TIF":
         with rasterio.open(id) as src:
             original_res_x = abs(src.transform[0])
@@ -254,7 +257,7 @@ def upload_item(item_url, payload, username, password):
     Uses the session from proxy_handler which has proper SSL verification settings.
     """
     session = get_session()  # Get session with proper proxy and SSL settings
-    
+
     response = session.put(
         url=item_url,
         json=payload,
@@ -273,7 +276,7 @@ def create_asset(asset_url, payload, username, password):
     Uses the session from proxy_handler which has proper SSL verification settings.
     """
     session = get_session()  # Get session with proper proxy and SSL settings
-    
+
     response = session.put(
         url=asset_url,
         json=payload,
@@ -311,8 +314,8 @@ def publish_to_stac(username, password, asset, item_name, collection, geocat_id,
         bool: True if successful, False otherwise
     """
     # Convert to lowercase as required by STAC FSDI
-    orig_asset = asset 
-    
+    orig_asset = asset
+
     raw_asset_path = os.path.dirname(asset)
     raw_item = item_name
 
@@ -323,16 +326,17 @@ def publish_to_stac(username, password, asset, item_name, collection, geocat_id,
     os.rename(asset, os.path.join(raw_asset_path,asset_lower))
     asset = asset_lower
 
-  
+
     try:
-        # Determine item title
+        # Determine item title.
+        # Use the item ID directly as title — no collection prefix.
         if current is not None:
             item_title = collection.replace('ch.swisstopo.', '')
             item = item_title
         else:
-            item_title = collection.replace('ch.swisstopo.', '') + "_" + item
+            item_title = item  # e.g. 'ram-2025-07-10t08002801'
 
-        
+
 
         # Build paths
         item_path = f'collections/{collection}/items/{item}'
@@ -354,8 +358,8 @@ def publish_to_stac(username, password, asset, item_name, collection, geocat_id,
         }
         asset_type = asset_type_map.get(extension, 'TIF')
         # Initialisierung — wird für TIF/JPEG/KML gefüllt, für TXT/CSV leer gelassen
-        coordinates_wgs84 = None   
-        dt_iso8601 = None          
+        coordinates_wgs84 = None
+        dt_iso8601 = None
 
         # Create ITEM if needed
         try:
@@ -379,7 +383,7 @@ def publish_to_stac(username, password, asset, item_name, collection, geocat_id,
                     for coord in coordinates_lv95
                 ]
             if asset_type == 'JPEG':
-                
+
                 lat, lon, exif_timestamp = photo_processor.extract_exif_data(orig_asset)
                 coordinates_wgs84 =[lon,lat]
 
@@ -391,7 +395,7 @@ def publish_to_stac(username, password, asset, item_name, collection, geocat_id,
                 match = re.search(r'Extent:\s*\(([^,]+),\s*([^)]+)\)\s*-\s*\(([^,]+),\s*([^)]+)\)', result.stdout)
                 if match:
                     minx, miny, maxx, maxy = map(float, match.groups())
-                    
+
                     coordinates_wgs84 =[
                         [minx, miny],
                         [maxx, miny],
@@ -401,10 +405,10 @@ def publish_to_stac(username, password, asset, item_name, collection, geocat_id,
                     ]
                 else:
                     raise ValueError("Could not find Extent in ogrinfo for KML output")
-            
-            # Convert datetime
+
+            # Convert datetime — item names use lowercase 't' as separator
             date_part = re.search(r'(\d{4}-\d{2}-\d{2}t\d{6})', raw_item).group(1)
-            dt = datetime.strptime(date_part, '%Y-%m-%dT%H%M%S')
+            dt = datetime.strptime(date_part, '%Y-%m-%dt%H%M%S')
             dt_iso8601 = dt.strftime('%Y-%m-%dT%H:%M:%SZ')
 
             # Create and upload item
@@ -540,7 +544,7 @@ Credential Priority (highest to lowest):
         logging.info("=" * 60)
         initialize_proxy()  # This initializes the global PROXY_CONFIG in proxy_handler
         logging.info("=" * 60)
-        
+
         # Get credentials using priority system
         username, password = get_credentials(
             args_username=args.username,

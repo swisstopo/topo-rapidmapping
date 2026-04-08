@@ -629,23 +629,95 @@ Ein Bash/DOS-Script zur Automatisierung der Publikation von Quick-Orthophoto-Pro
 - **Verarbeitet große Datensätze** mit Multi-Threading und optimierten Einstellungen
 
 #### Verwendung
-Führen Sie das Script in Ihrer Shell (Linux oder OSGeo4W Shell) oder Windows/DOS Eingabeaufforderung aus:
 
-**Linux:**
-```sh
-bash rm_publish_quickorthophoto.sh /pfad/zum/input_ordner /pfad/zum/output_ordner
+### Interaktiv (geführter Modus)
+
+```bash
+python rapidmapping_processor.py              # INT-Umgebung
+python rapidmapping_processor.py --prod       # PROD-Umgebung
+python rapidmapping_processor.py --upload=False  # Lokal speichern (kein Upload)
+python rapidmapping_processor.py --debug      # Debug-Modus (sequentiell, volles Logging)
 ```
 
-**Windows/DOS:**
-```sh
-rm_publish_quickorthophoto.bat /pfad/zum/input_ordner /pfad/zum/output_ordner
+### Vollständig via CLI-Parameter
+
+Alle Parameter können direkt übergeben werden
+Kein interaktiver Dialog  --product, --input und --timestamp alle gesetzt sind
+
+```bash
+# EBN (Einzelbilder Nadir) — Datumsangabe
+python rapidmapping_processor.py --product ebn --input C:\data\rm --timestamp 2025-09-03
+
+# EBO (Einzelbilder Oblique)
+python rapidmapping_processor.py --product ebo --input /data/rm --timestamp 2025-09-03
+
+# QDOP RGB Mosaic — Zeitstempel mit Hundertelsekunden
+python rapidmapping_processor.py --product qdop-rgb --input /data/rm --timestamp 2024-07-15t14300000
+
+# QDOP NRG Mosaic — Produktion
+python rapidmapping_processor.py --product qdop-nrg --input /data --timestamp 2024-07-15t143000 --prod
+
+# Lokale Ausgabe ohne Upload (in ./output/)
+python rapidmapping_processor.py --product ebn --input /data --timestamp 2025-09-03 --upload=False
+
+# Debug + lokal + keine Bestätigung Eingabe
+python rapidmapping_processor.py --product ebn --input /data --timestamp 2025-09-03 --upload=False --debug --yes
 ```
 
-- Ersetzen Sie `/pfad/zum/input_ordner` mit Ihrem Orthophoto-Quellverzeichnis
-- Ersetzen Sie `/pfad/zum/output_ordner` mit Ihrem gewünschten Zielverzeichnis
+### Parameter-Übersicht
 
----
+| Parameter | Werte | Beschreibung |
+|-----------|-------|--------------|
+| `--product` | `ebn`, `ebo`, `qdop-rgb`, `qdop-nrg` | Produkttyp |
+| `--input` | Pfad | Quellverzeichnis mit Eingabedaten |
+| `--timestamp` | `YYYY-MM-DD` oder `YYYY-MM-DDthhmmss[cc]` | Datum/Zeitstempel |
+| `--upload` | `True` / `False` | Upload zu STAC (False → ./output/) |
+| `--prod` | Flag | Produktionsumgebung (default: INT) |
+| `--debug` | Flag | Sequentiell + volles Logging |
 
+### Debug-Modus direkt im Code setzen
+
+Für Entwicklung ohne CLI-Argumente kann `DEBUG_MODE_DEFAULT` direkt in `rapidmapping_processor.py` gesetzt werden:
+
+```python
+# Zeile ~250 in rapidmapping_processor.py
+DEBUG_MODE_DEFAULT = True   # Debug ein
+DEBUG_MODE_DEFAULT = False  # Debug aus (Produktion)
+```
+
+## STAC Item- und Asset-Namenskonvention
+
+### Zeitstempel mit Hundertelsekunden (alle Produkte)
+
+Alle Items und Assets enthalten immer einen 2-stelligen Hundertelsekunden-Suffix (`cc`, default `00`):
+
+```
+ram-YYYY-MM-DDthhmmsscc
+```
+
+Beispiele:
+- `ram-2025-09-03t12523700`  (kein Burst, cc=00)
+- `ram-2025-09-03t08002801`  (Burst-Frame 1, cc=01)
+- `ram-2025-09-03t08002802`  (Burst-Frame 2, cc=02)
+
+### QDOP RGB/NRG Mosaike — gemeinsames Item
+
+Beide Mosaikvarianten (RGB und NRG) desselben Aufnahmezeitpunkts werden als Assets **im selben STAC Item** gespeichert:
+
+```
+Item:   ram-2024-07-15t14300000
+Assets: ram-2024-07-15t14300000-qdop-rgb-mosaic.tif
+        ram-2024-07-15t14300000-qdop-nrg-mosaic.tif
+        thumbnail.jpg
+```
+
+### EBN / EBO Einzelbilder
+
+```
+Item:   ram-2025-09-03t12523700-ebn-photo
+Assets: ram-2025-09-03t12523700-ebn-photo.jpg
+        thumbnail.jpg
+```
 ### rm_process_pug_images.py
 
 #### Beschreibung
@@ -710,8 +782,6 @@ python util_stac_delete_ram.py
 3. Bestätigen Sie die Löschung
 
 **⚠️ Vorsicht:** Gelöschte Items können nicht wiederhergestellt werden!
-
-
 ## Generate Executable binaries / EXE  ( for now: WINDOWS only)
 
 The WINDOWS version was created with pyinstaller. [quite a thing](https://stackoverflow.com/questions/56472933/pyinstaller-executable-fails).
@@ -725,7 +795,7 @@ Solution steps
 **One EXE Use the provided .bat creator (recommended)**
 1. Run script
    ```sh
-   pyinstaller_onefile.bat
+   ./pyinstaller_onefile.bat
     ```
 2. Create your secrets folder in the same dir
   - `proxy_config.json`
@@ -735,7 +805,7 @@ Solution steps
 Use this approach if the generated EXE  throws some errors...
 1. Run script
    ```sh
-   pyinstaller_onefile.bat
+   ./pyinstaller_onedir.bat
     ```
 2. Create your secrets folder in the same dir
   - `proxy_config.json`

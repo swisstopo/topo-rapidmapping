@@ -26,7 +26,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional, Dict, List, Tuple
 from datetime import datetime
-from configuration import THUMBNAIL_CONFIG, ProductType, generate_item_name, generate_asset_name
+from configuration import THUMBNAIL_CONFIG, ProductType, generate_item_name, generate_asset_name, get_product_config
 from utilities.file_handler import get_jpg_files
 # publish_to_stac wird lazy importiert (innerhalb der Funktion) um zirkuläre
 # Imports zu vermeiden: util_publish_stac_fsdi → utilities → photo_processor
@@ -1734,7 +1734,7 @@ def process_individual_photos(
 
                     jpg_file   = jpg_result
                     item_name  = work['item_name']
-                    asset_name = item_name
+                    asset_name = f"{item_name}-{get_product_config(product_type)['suffix']}"
                     lat, lon, exif_timestamp = extract_exif_data(jpg_file)
                     if debug:
                         if lat: logger.info(f"     ✓ GPS: {lat:.6f}, {lon:.6f}")
@@ -1749,7 +1749,7 @@ def process_individual_photos(
                         else:   logger.warning("     ⚠ Keine GPS-Daten")
                     timestamp  = parse_exif_timestamp(exif_timestamp, jpg_file.name)
                     item_name  = generate_item_name(timestamp, product_type)
-                    asset_name = item_name
+                    asset_name = f"{item_name}-{get_product_config(product_type)['suffix']}"
 
                 if debug: logger.info(f"  2️⃣  Item-Name: {item_name}")
 

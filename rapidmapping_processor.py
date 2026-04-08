@@ -133,15 +133,18 @@ def _ensure_ms_suffix(timestamp: str) -> str:
 
 
 def process_mosaic_workflow(
-    input_dir, product_type, timestamp, upload_enabled, environment, hostname
+    input_dir, product_type, timestamp, upload_enabled, environment, hostname,
+    debug: bool = False,
 ):
     """Workflow fuer Orthophoto-Mosaike.
 
-    v2.2: Item/Asset-Namen haben immer ms-Suffix "00".
+    B) QDOP-Item hat jetzt keine Produktsuffix mehr: ram-YYYY-MM-DDthhmmsscc
+       Beide Varianten (RGB + NRG) landen als Assets im selben Item.
     """
     try:
-        temp_dir = Path("temp")
-        temp_dir.mkdir(exist_ok=True)
+        output_dir = Path("output") if not upload_enabled else Path("temp")
+        output_dir.mkdir(exist_ok=True)
+        temp_dir = output_dir
 
         config = get_product_config(product_type)
 
@@ -225,13 +228,14 @@ def process_photos_workflow(
     input_dir, product_type, date, upload_enabled, environment, hostname,
     debug: bool = False,
 ):
+    """
     import logging as _logging
     if not debug:
         for _mod in ['utilities.stac_publisher', 'utilities.credentials',
                      'utilities.proxy_handler', 'main_multipart_upload_via_api',
                      'util_publish_stac_fsdi', 'utilities.kml_generator']:
             _logging.getLogger(_mod).setLevel(_logging.WARNING)
-    """Workflow fuer Einzelbilder: Upload -> KML -> CSV.
+    # Workflow fuer Einzelbilder: Upload -> KML -> CSV.
 
     v2.2:
     - KML/CSV Overview-Item: Timestamp t23595900 (ms-Suffix "00")
@@ -251,7 +255,7 @@ def process_photos_workflow(
 
         logger = logging.getLogger(__name__)
 
-        temp_dir = Path("temp")
+        temp_dir = Path("output") if not upload_enabled else Path("temp")
         temp_dir.mkdir(exist_ok=True)
 
         config         = get_product_config(product_type)
@@ -373,23 +377,81 @@ def process_photos_workflow(
         return False
 
 
+def _normalize_cli_timestamp(raw: str) -> str:
+    """
+    Normalize compact timestamp to standard YYYY-MM-DDthhmmss[cc] format.
+
+    Args:
+        raw (str): Raw CLI input, e.g. '20210729t125959' or '20210729'
+
+    Returns:
+        str: Normalized timestamp, e.g. '2021-07-29t125959'
+    """
+    # Already normalized if it contains dashes
+    if '-' in raw:
+        return raw
+    # Match compact: YYYYMMDD[tHHMMSS[CC]]
+    m = re.match(r'^(\d{4})(\d{2})(\d{2})(t\d{6}(\d{2})?)?$', raw)
+    if m:
+        date_part = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+        time_part = m.group(4) or ''
+        return date_part + time_part
+    return raw  # return as-is; validate_timestamp will reject it later
+
+
+# ============================================================
+# C) DEBUG-MODUS: Direkt hier setzen wenn ohne CLI-Argumente gestartet wird.
+#    True  = sequentielle Verarbeitung + volles Logging (Debugging)
+#    False = parallele Verarbeitung, minimales Logging (Produktion)
+DEBUG_MODE_DEFAULT = False
+# ============================================================
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Swisstopo Rapid Mapping Processor v2.0 (subprocess); POC!',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-    Beispiele:
-    python rapidmapping_processor.py              # INT
-    python rapidmapping_processor.py --prod       # PROD
-    python rapidmapping_processor.py --upload=False  # Kein Upload
+    Beispiele (interaktiv):
+    python rapidmapping_processor.py
+    python rapidmapping_processor.py --prod
+    python rapidmapping_processor.py --upload=False
+
+    Beispiele (vollständig via CLI):
+    python rapidmapping_processor.py --product ebn --input C:\\data\\rm --timestamp 2025-09-03
+    python rapidmapping_processor.py --product qdop-rgb --input /data/rm --timestamp 2024-07-15t143000
+    python rapidmapping_processor.py --product ebo --input /data/rm --timestamp 2025-03-12 --upload=False
+    python rapidmapping_processor.py --product qdop-nrg --input /data --timestamp 2024-07-15t14300000 --prod
+    python rapidmapping_processor.py --product ebn --input /data --timestamp 2025-09-03 --debug
         """
     )
-    parser.add_argument('--upload', type=lambda x: x.lower() != 'false', default=True)
-    parser.add_argument('--prod', action='store_true')
-    parser.add_argument('--debug', action='store_true', help='Debug-Modus: sequentielle Verarbeitung mit vollem Logging')
+    # Basic options
+    parser.add_argument('--upload', type=lambda x: x.lower() != 'false', default=True,
+                        help='Upload zu STAC (default: True). False = Ausgabe in ./output/')
+    parser.add_argument('--prod', action='store_true',
+                        help='Produktionsumgebung verwenden (default: INT)')
+    parser.add_argument('--debug', action='store_true', default=None,
+                        help='Debug-Modus: sequentiell + volles Logging')
+
+    # D) Full CLI product configuration (optional — falls nicht angegeben: interaktiv)
+    parser.add_argument('--input', '--input-dir', dest='input_dir', default=None,
+                        metavar='VERZEICHNIS',
+                        help='Quellverzeichnis mit Eingabedaten')
+    parser.add_argument('--product', dest='product', default=None,
+                        choices=['ebn', 'ebo', 'qdop-rgb', 'qdop-nrg'],
+                        help='Produkttyp: ebn, ebo, qdop-rgb, qdop-nrg')
+    parser.add_argument('--timestamp', '--date', dest='timestamp', default=None,
+                        metavar='TIMESTAMP',
+                        help=('Zeitstempel/Datum. '
+                              'QDOP/EBN/EBO: YYYY-MM-DDthhmmss[cc]  '
+                              'EBN/EBO Datum: YYYY-MM-DD'))
 
     args = parser.parse_args()
     environment = "PROD" if args.prod else "INT"
+
+    # C) Resolve debug flag: CLI > DEBUG_MODE_DEFAULT
+    if args.debug is None:
+        args.debug = DEBUG_MODE_DEFAULT
 
     try:
         print_banner()
@@ -407,9 +469,48 @@ def main():
         logger.info("KONFIGURATION")
         logger.info("=" * 70)
 
-        input_dir         = prompt_input_directory()
-        product_type      = prompt_product_type()
-        timestamp_or_date = prompt_timestamp(product_type)
+        # D) CLI params take priority; fall back to interactive prompts
+        _product_map = {
+            'ebn': ProductType.EBN, 'ebo': ProductType.EBO,
+            'qdop-rgb': ProductType.QDOP_RGB, 'qdop-nrg': ProductType.QDOP_NRG,
+        }
+
+        if args.input_dir:
+            input_dir = validate_directory(args.input_dir)
+            logger.info(f"✓ Input-Verzeichnis (CLI): {input_dir}")
+        else:
+            input_dir = prompt_input_directory()
+
+        if args.product:
+            product_type = _product_map[args.product]
+            logger.info(f"✓ Produkttyp (CLI): {product_type.value}")
+        else:
+            product_type = prompt_product_type()
+
+        if args.timestamp:
+            ts = _normalize_cli_timestamp(args.timestamp.lower().strip())
+            if product_type in (ProductType.EBN, ProductType.EBO):
+                # EBN/EBO: accept date only (YYYY-MM-DD)
+                try:
+                    datetime.strptime(ts[:10], '%Y-%m-%d')
+                    timestamp_or_date = ts[:10]
+                except ValueError:
+                    logger.error(
+                        f"✗ Ungültiges Datum: {args.timestamp}. Erwartet: YYYY-MM-DD"
+                    )
+                    return 1
+            else:
+                # QDOP: require full timestamp YYYY-MM-DDthhmmss[cc]
+                if not validate_timestamp(ts):
+                    logger.error(
+                        f"✗ Ungültiger Zeitstempel: {args.timestamp}. "
+                        f"Erwartet: YYYY-MM-DDthhmmss[cc] oder YYYYMMDDthhmmss[cc]"
+                    )
+                    return 1
+                timestamp_or_date = ts
+            logger.info(f"✓ Zeitstempel (CLI): {timestamp_or_date}")
+        else:
+            timestamp_or_date = prompt_timestamp(product_type)
 
         print("\n" + "=" * 70)
         print("ZUSAMMENFASSUNG")
@@ -418,13 +519,25 @@ def main():
         print(f"  Input-Verz.:    {input_dir}")
         print(f"  Produkttyp:     {product_type.value}")
         print(f"  Zeitstempel:    {timestamp_or_date}")
-        print(f"  STAC Upload:    {'Aktiviert' if args.upload else 'Deaktiviert'}")
+        print(f"  STAC Upload:    {'Aktiviert' if args.upload else 'Deaktiviert (→ ./output/)'}")
         print(f"  Debug-Modus:    {'AN (sequentiell)' if args.debug else 'AUS (parallel)'}")
         if args.upload:
             print(f"  STAC Hostname:  {hostname}")
+        else:
+            from pathlib import Path as _P
+            _P("output").mkdir(exist_ok=True)
+            print(f"  Output-Verz.:   {_P('output').resolve()}")
         print("=" * 70)
 
-        confirm = input("\n▶ Verarbeitung starten? [j/N]: ").strip().lower()
+        # Skip confirmation when all parameters supplied via CLI
+        _all_cli = (args.input_dir is not None
+                    and args.product is not None
+                    and args.timestamp is not None)
+        if _all_cli:
+            logger.info("▶ CLI-Modus: Starte ohne Bestätigung")
+            confirm = 'j'
+        else:
+            confirm = input("\n▶ Verarbeitung starten? [j/N]: ").strip().lower()
         if confirm not in ['j', 'ja', 'y', 'yes']:
             logger.info("Abbruch")
             return 0
@@ -436,7 +549,8 @@ def main():
         if product_type in [ProductType.QDOP_RGB, ProductType.QDOP_NRG]:
             success = process_mosaic_workflow(
                 input_dir, product_type, timestamp_or_date,
-                args.upload, environment, hostname
+                args.upload, environment, hostname,
+                debug=args.debug
             )
         else:
             success = process_photos_workflow(

@@ -62,10 +62,15 @@ def query_stac_items_by_date(
             for feature in data.get("features", []):
                 item_id = feature["id"]
 
-                if product_suffix not in item_id or 'overview' in item_id:
+                # Skip overview items
+                if 'overview' in item_id:
                     continue
 
-                assets   = feature.get("assets", {})
+                # Filter by asset keys — item names no longer contain the product
+                # suffix, but asset filenames still do (e.g. ram-...-ebn-photo.jpg)
+                assets = feature.get("assets", {})
+                if not any(product_suffix in k for k in assets):
+                    continue
                 props    = feature.get("properties", {})
                 geometry = feature.get("geometry", {})
 

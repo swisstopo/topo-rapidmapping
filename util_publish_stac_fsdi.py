@@ -383,9 +383,13 @@ def publish_to_stac(username, password, asset, item_name, collection, geocat_id,
                     for coord in coordinates_lv95
                 ]
             if asset_type == 'JPEG':
-
                 lat, lon, exif_timestamp = photo_processor.extract_exif_data(orig_asset)
-                coordinates_wgs84 =[lon,lat]
+                # Only set geometry when GPS data is present.
+                # thumbnail.jpg and other non-geotagged JPEGs return None — in that
+                # case coordinates_wgs84 stays None and item creation is skipped
+                # (the item was already created by the primary TIF/JPEG upload).
+                if lat is not None and lon is not None:
+                    coordinates_wgs84 = [lon, lat]
 
             if asset_type == 'KML':
                 cmd = ['ogrinfo', '-so', '-al', orig_asset]

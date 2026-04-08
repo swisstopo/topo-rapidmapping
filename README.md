@@ -660,7 +660,7 @@ python rapidmapping_processor.py --product qdop-nrg --input /data --timestamp 20
 # Lokale Ausgabe ohne Upload (in ./output/)
 python rapidmapping_processor.py --product ebn --input /data --timestamp 2025-09-03 --upload=False
 
-# Debug + lokal + keine Bestätigung Eingabe
+# Debug + lokal 
 python rapidmapping_processor.py --product ebn --input /data --timestamp 2025-09-03 --upload=False --debug --yes
 ```
 

@@ -126,16 +126,12 @@ def item_create_json_payload(id, coordinates, dt_iso8601, title, geocat_id, curr
     """Create JSON payload for a STAC item.
 
     Product type is detected from the asset filename so that item titles
-    can be plain item IDs (e.g. 'ram-2025-07-10t08002801') without any
-    collection prefix or product suffix.
+    can be plain item IDs without any collection prefix or product suffix.
     """
     domain = f"https://{stac_hostname}/"
     asset_lower = asset.lower()
     id_lower = id.lower()
 
-    # Determine preview thumbnail / icon from the asset filename.
-    # Individual photo assets contain the product suffix (e.g. '-ebn-photo.jpg').
-    # Overview KML assets end with '.kml'; QDOP TIF assets contain '-qdop-'.
     if "-ebo-photo" in asset_lower:
         config = get_product_config(ProductType.EBO)
         thumbnail_url = config['icon_url']
@@ -143,30 +139,19 @@ def item_create_json_payload(id, coordinates, dt_iso8601, title, geocat_id, curr
         config = get_product_config(ProductType.EBN)
         thumbnail_url = config['icon_url']
     elif asset_lower.endswith('.kml') and 'overview' in id_lower:
-        # Overview item: default to EBN icon (product cannot be derived from
-        # new item naming that omits the product suffix)
         config = get_product_config(ProductType.EBN)
         thumbnail_url = config['icon_url']
     else:
-        # QDOP mosaic or any other asset — use the generated thumbnail
         thumbnail_url = f"{domain}{STAC_COLLECTION}/{id}/thumbnail.jpg"
 
-    # Build base links
-    links = [
-        {
-            "href": thumbnail_url,
-            "rel": "preview"
-        }
-    ]
+    links = [{"href": thumbnail_url, "rel": "preview"}]
 
-    # COG visual link for QDOP mosaic assets
     if "-qdop-" in asset_lower:
         links.insert(0, {
             "href": f"https://map.geo.admin.ch/#/map?layers=COG|{domain}{STAC_COLLECTION}/{id}/{asset}",
             "rel": "visual"
         })
 
-    # KML visual link for overview items
     if asset_lower.endswith('.kml'):
         links.insert(0, {
             "href": f"https://map.geo.admin.ch/#/map?layers=KML|{domain}{STAC_COLLECTION}/{id}/{asset}",
@@ -328,13 +313,12 @@ def publish_to_stac(username, password, asset, item_name, collection, geocat_id,
 
 
     try:
-        # Determine item title.
-        # Use the item ID directly as title — no collection prefix.
+        # Item title is the item ID — no collection prefix.
         if current is not None:
             item_title = collection.replace('ch.swisstopo.', '')
             item = item_title
         else:
-            item_title = item  # e.g. 'ram-2025-07-10t08002801'
+            item_title = item
 
 
 
@@ -383,11 +367,16 @@ def publish_to_stac(username, password, asset, item_name, collection, geocat_id,
                     for coord in coordinates_lv95
                 ]
             if asset_type == 'JPEG':
-                lat, lon, exif_timestamp = photo_processor.extract_exif_data(orig_asset)
-                # Only set geometry when GPS data is present.
-                # thumbnail.jpg and other non-geotagged JPEGs return None — in that
-                # case coordinates_wgs84 stays None and item creation is skipped
-                # (the item was already created by the primary TIF/JPEG upload).
+                # extract_exif_data expects a Path; orig_asset may be a str.
+                # Wrap in try/except so a missing GPS (thumbnail.jpg) or a
+                # str-vs-Path mismatch never bubbles up to the outer handler.
+                try:
+                    lat, lon, exif_timestamp = photo_processor.extract_exif_data(orig_asset)
+                except Exception:
+                    lat, lon = None, None
+                # Only set geometry when valid GPS coordinates are present.
+                # thumbnail.jpg has no GPS → coordinates_wgs84 stays None
+                # → item creation is skipped (item already exists from TIF upload).
                 if lat is not None and lon is not None:
                     coordinates_wgs84 = [lon, lat]
 

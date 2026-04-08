@@ -635,7 +635,7 @@ Ein Bash/DOS-Script zur Automatisierung der Publikation von Quick-Orthophoto-Pro
 ```bash
 python rapidmapping_processor.py              # INT-Umgebung
 python rapidmapping_processor.py --prod       # PROD-Umgebung
-python rapidmapping_processor.py --upload=False  # Lokal speichern (kein Upload)
+python rapidmapping_processor.py --upload=False  # Lokal speichern (kein Upload, WORK IN PROGRESS)
 python rapidmapping_processor.py --debug      # Debug-Modus (sequentiell, volles Logging)
 ```
 
@@ -661,7 +661,7 @@ python rapidmapping_processor.py --product qdop-nrg --input /data --timestamp 20
 python rapidmapping_processor.py --product ebn --input /data --timestamp 2025-09-03 --upload=False
 
 # Debug + lokal 
-python rapidmapping_processor.py --product ebn --input /data --timestamp 2025-09-03 --upload=False --debug --yes
+python rapidmapping_processor.py --product ebn --input /data --timestamp 2025-09-03 --upload=False --debug 
 ```
 
 ### Parameter-Übersicht

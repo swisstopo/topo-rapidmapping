@@ -1,6 +1,6 @@
 @echo off
 REM ========================================================================
-REM Rapid Mapping Processor - Complete Cleanup and Rebuild Script
+REM Rapid Mapping Processor - Directory Build (--onedir)
 REM ========================================================================
 chcp 65001 >nul
 
@@ -13,82 +13,38 @@ echo.
 REM ========================================================================
 REM SCHRITT 1: KOMPLETTER CLEANUP
 REM ========================================================================
-echo [1/5] Kompletter Cleanup...
+echo [1/6] Kompletter Cleanup...
 echo.
 
-REM PyInstaller Build-Artefakte
 echo   - Lösche build\ Verzeichnis...
 if exist build (
     rmdir /s /q build 2>nul
-    if exist build (
-        echo     ⚠ Konnte build\ nicht komplett löschen
-    ) else (
-        echo     ✓ build\ gelöscht
-    )
-) else (
-    echo     ℹ build\ existiert nicht
-)
+    if exist build (echo     ⚠ Konnte build\ nicht löschen) else (echo     ✓ build\ gelöscht)
+) else (echo     ℹ build\ existiert nicht)
 
 echo   - Lösche dist\ Verzeichnis...
 if exist dist (
     rmdir /s /q dist 2>nul
-    if exist dist (
-        echo     ⚠ Konnte dist\ nicht komplett löschen
-    ) else (
-        echo     ✓ dist\ gelöscht
-    )
-) else (
-    echo     ℹ dist\ existiert nicht
-)
+    if exist dist (echo     ⚠ Konnte dist\ nicht löschen) else (echo     ✓ dist\ gelöscht)
+) else (echo     ℹ dist\ existiert nicht)
 
 echo   - Lösche .spec Dateien...
-if exist *.spec (
-    del /q *.spec 2>nul
-    echo     ✓ .spec Dateien gelöscht
-) else (
-    echo     ℹ Keine .spec Dateien gefunden
-)
+if exist *.spec (del /q *.spec 2>nul && echo     ✓ .spec gelöscht) else (echo     ℹ keine .spec Dateien)
 
-REM Runtime Hook
 echo   - Lösche alten Runtime-Hook...
-if exist rth_proj_fix.py (
-    del /q rth_proj_fix.py 2>nul
-    echo     ✓ rth_proj_fix.py gelöscht
-) else (
-    echo     ℹ rth_proj_fix.py existiert nicht
-)
+if exist rth_proj_fix.py (del /q rth_proj_fix.py 2>nul && echo     ✓ rth_proj_fix.py gelöscht) else (echo     ℹ rth_proj_fix.py nicht vorhanden)
 
-REM PyInstaller Cache
 echo   - Lösche PyInstaller Cache...
 if exist "%LOCALAPPDATA%\pyinstaller" (
     rmdir /s /q "%LOCALAPPDATA%\pyinstaller" 2>nul
-    if exist "%LOCALAPPDATA%\pyinstaller" (
-        echo     ⚠ Konnte Cache nicht komplett löschen
-    ) else (
-        echo     ✓ PyInstaller Cache gelöscht
-    )
-) else (
-    echo     ℹ PyInstaller Cache existiert nicht
-)
+    if exist "%LOCALAPPDATA%\pyinstaller" (echo     ⚠ Cache nicht komplett gelöscht) else (echo     ✓ Cache gelöscht)
+) else (echo     ℹ Cache existiert nicht)
 
-REM Python Cache
-echo   - Lösche Python __pycache__...
-if exist __pycache__ (
-    rmdir /s /q __pycache__ 2>nul
-    echo     ✓ Haupt-Cache gelöscht
-)
-
-for /d /r . %%d in (__pycache__) do (
-    if exist "%%d" (
-        rmdir /s /q "%%d" 2>nul
-    )
-)
-echo     ✓ Alle __pycache__ Verzeichnisse gelöscht
-
-REM .pyc Dateien
-echo   - Lösche .pyc Dateien...
+echo   - Lösche __pycache__ und .pyc...
+if exist __pycache__ (rmdir /s /q __pycache__ 2>nul)
+for /d /r . %%d in (__pycache__) do (if exist "%%d" rmdir /s /q "%%d" 2>nul)
 del /s /q *.pyc 2>nul
-echo     ✓ .pyc Dateien gelöscht
+echo     ✓ Python Cache gelöscht
 
 echo.
 echo   ✓ Cleanup abgeschlossen
@@ -96,12 +52,6 @@ echo.
 
 REM ========================================================================
 REM SCHRITT 2: QGIS/GDAL UMGEBUNGSVARIABLEN ISOLIEREN
-REM
-REM Problem: QGIS setzt PROJ_LIB / GDAL_DATA als System-Umgebungsvariablen.
-REM          rasterio im PyInstaller-Bundle findet dann QGIS proj.db (v5)
-REM          statt der venv-eigenen proj.db (v6+) -> PROJ-Versionsfehler.
-REM Lösung:  Variablen für diesen Build-Prozess leeren, sodass PyInstaller
-REM          die korrekten Pfade aus dem venv bündelt.
 REM ========================================================================
 echo [2/6] Isoliere Build-Umgebung von QGIS/GDAL...
 echo.
@@ -121,9 +71,9 @@ echo.
 REM ========================================================================
 REM SCHRITT 3: RUNTIME-HOOK ERSTELLEN
 REM
-REM Die EXE erbt zur Laufzeit System-Umgebungsvariablen des Benutzers.
-REM Dieser Hook setzt beim EXE-Start PROJ_LIB / GDAL_DATA auf die
-REM mitgebündelten Pfade (sys._MEIPASS) und überschreibt damit QGIS-Pfade.
+REM WICHTIGSTE ÄNDERUNG: Der Hook entfernt QGIS-Pfade IMMER - auch wenn
+REM keine gebündelte proj.db gefunden wird. Ein fehlender PROJ_LIB ist
+REM besser als ein falscher (QGIS v5 vs. rasterio v6+).
 REM ========================================================================
 echo [3/6] Erstelle Runtime-Hook (rth_proj_fix.py)...
 echo.
@@ -134,36 +84,42 @@ echo import sys
 echo.
 echo # -----------------------------------------------------------------------
 echo # PyInstaller Runtime-Hook: PROJ / GDAL Pfadkorrektur
-echo # Wird als ALLERERSTES beim Start der EXE ausgefuehrt.
-echo # Ueberschreibt QGIS-Systemvariablen mit den gebundelten Pfaden.
+echo # Laeuft als ALLERERSTES beim EXE-Start, vor allen anderen Imports.
 echo # -----------------------------------------------------------------------
 echo if getattr^(sys, "frozen", False^):
 echo     _base = sys._MEIPASS
 echo.
-echo     # Suche proj.db in den bekannten PyInstaller-Paketpfaden
-echo     _proj_candidates = [
+echo     # --- Schritt 1: QGIS/OSGEO Pfade IMMER entfernen -------------------
+echo     # Unabhaengig davon ob bundled proj.db gefunden wird.
+echo     # Ein fehlender PROJ_LIB ist besser als QGIS v5 vs. rasterio v6+.
+echo     for _var in ^("PROJ_LIB", "PROJ_DATA", "GDAL_DATA",
+echo                  "GDAL_DRIVER_PATH", "GDAL_PLUGINS"^):
+echo         _val = os.environ.get^(_var, ""^)
+echo         if any^(k in _val.upper^(^) for k in ^("QGIS", "OSGEO", "OSGEO4W"^)^):
+echo             os.environ.pop^(_var, None^)
+echo.
+echo     # --- Schritt 2: Bundled proj.db setzen (pyproj --collect-data) -----
+echo     for _candidate in ^(
 echo         os.path.join^(_base, "pyproj", "proj_dir"^),
 echo         os.path.join^(_base, "proj_dir"^),
 echo         os.path.join^(_base, "share", "proj"^),
-echo     ]
-echo     for _candidate in _proj_candidates:
+echo     ^):
 echo         if os.path.isfile^(os.path.join^(_candidate, "proj.db"^)^):
 echo             os.environ["PROJ_LIB"]  = _candidate
 echo             os.environ["PROJ_DATA"] = _candidate
 echo             break
 echo.
-echo     # Suche gdal-data im Bundle
-echo     _gdal_candidates = [
+echo     # --- Schritt 3: Bundled gdal-data setzen ---------------------------
+echo     for _candidate in ^(
 echo         os.path.join^(_base, "gdal-data"^),
 echo         os.path.join^(_base, "rasterio", "gdal_data"^),
 echo         os.path.join^(_base, "osgeo", "gdal_data"^),
-echo     ]
-echo     for _candidate in _gdal_candidates:
+echo     ^):
 echo         if os.path.isdir^(_candidate^):
-echo             os.environ["GDAL_DATA"] = _candidate
+echo             os.environ.setdefault^("GDAL_DATA", _candidate^)
 echo             break
 echo.
-echo     # Netzwerkzugriff fuer PROJ-Datenbank deaktivieren
+echo     # --- Schritt 4: PROJ-Netzwerkzugriff deaktivieren ------------------
 echo     os.environ.setdefault^("PROJ_NETWORK", "OFF"^)
 ) > rth_proj_fix.py
 
@@ -182,42 +138,39 @@ REM ========================================================================
 echo [4/6] Prüfe Dependencies...
 echo.
 
-REM Prüfe Python
 python --version >nul 2>&1
 if %errorlevel% neq 0 (
-    echo   ✗ Python nicht gefunden!
-    echo   Bitte Python installieren und zum PATH hinzufügen.
+    echo   ✗ Python nicht gefunden! Bitte zum PATH hinzufügen.
     pause
     exit /b 1
 )
 python --version
 echo   ✓ Python verfügbar
 
-
-REM Prüfe rasterio
 python -c "import rasterio" >nul 2>&1
 if %errorlevel% neq 0 (
-    echo   ⚠ rasterio nicht gefunden
-    echo   Installiere requirements.txt...
+    echo   ⚠ rasterio nicht gefunden - installiere requirements.txt...
     pip install -r requirements.txt
-    if %errorlevel% neq 0 (
-        echo   ✗ Requirements Installation fehlgeschlagen!
-        pause
-        exit /b 1
-    )
+    if %errorlevel% neq 0 (echo   ✗ Requirements Installation fehlgeschlagen! && pause && exit /b 1)
 )
 echo   ✓ rasterio verfügbar
 
-REM Prüfe pyproj (wird für PROJ-Daten im Bundle benötigt)
+python -c "import PyInstaller" >nul 2>&1
+if %errorlevel% neq 0 (
+    echo   ⚠ PyInstaller nicht gefunden - installiere...
+    pip install pyinstaller
+    if %errorlevel% neq 0 (echo   ✗ PyInstaller Installation fehlgeschlagen! && pause && exit /b 1)
+)
+echo   ✓ PyInstaller verfügbar
+
 python -c "import pyproj" >nul 2>&1
 if %errorlevel% neq 0 (
-    echo   ⚠ pyproj nicht gefunden - PROJ-Daten werden nicht korrekt gebündelt!
-    echo   Installiere: pip install pyproj
+    echo   ⚠ pyproj nicht gefunden - PROJ-Daten werden nicht korrekt gebuendelt!
+    echo     Installiere: pip install pyproj
 ) else (
     echo   ✓ pyproj verfügbar
 )
 
-REM Zeige PROJ-Pfad aus venv (zur Kontrolle)
 echo.
 echo   PROJ-Datenpfad aus venv:
 python -c "import pyproj; print('   ', pyproj.datadir.get_data_dir())" 2>nul
@@ -228,10 +181,8 @@ REM SCHRITT 5: REBUILD MIT --onedir (KEINE KOMPRESSION)
 REM ========================================================================
 echo [5/6] Building EXE (--onedir, ohne Kompression)...
 echo.
-echo   INFO: Verwende --onedir statt --onefile
-echo         Runtime-Hook: rth_proj_fix.py (PROJ/GDAL Pfadkorrektur)
-echo         Dies vermeidet Dekomprimierungs-Probleme mit DLLs
-echo         Resultat: Ordner mit EXE + DLLs statt einzelner EXE
+echo   INFO: Runtime-Hook rth_proj_fix.py entfernt QGIS-PROJ-Pfade beim Start.
+echo         Resultat: Ordner mit EXE + DLLs
 echo.
 
 pyinstaller --noconfirm --onedir --console ^
@@ -270,11 +221,7 @@ if %errorlevel% neq 0 (
     echo      pip install pyinstaller
     echo      Dann dieses Skript aus dem aktivierten venv starten.
     echo.
-    echo   2. PyInstaller neu installieren:
-    echo      pip uninstall pyinstaller
-    echo      pip install pyinstaller
-    echo.
-    echo   3. Prüfe Build-Log:
+    echo   2. Build-Log prüfen:
     echo      build\rapidmapping_processor\warn-rapidmapping_processor.txt
     echo.
     if exist rth_proj_fix.py del /q rth_proj_fix.py
@@ -283,21 +230,20 @@ if %errorlevel% neq 0 (
 )
 
 echo.
-echo   ✓ Build erfolgreich abgeschlossen
+echo   ✓ Build erfolgreich
 echo.
 
-REM Runtime-Hook aufräumen
 if exist rth_proj_fix.py del /q rth_proj_fix.py
 
 REM ========================================================================
-REM SCHRITT 6: PRÜFE OUTPUT
+REM SCHRITT 6: PRÜFE OUTPUT UND TESTE
 REM ========================================================================
-echo [6/6] Prüfe Output...
+echo [6/6] Prüfe Output und teste EXE...
 echo.
 
 if not exist "dist\rapidmapping_processor\rapidmapping_processor.exe" (
     echo   ✗ EXE nicht gefunden!
-    echo   Erwarteter Pfad: dist\rapidmapping_processor\rapidmapping_processor.exe
+    echo   Erwartet: dist\rapidmapping_processor\rapidmapping_processor.exe
     pause
     exit /b 1
 )
@@ -305,89 +251,38 @@ if not exist "dist\rapidmapping_processor\rapidmapping_processor.exe" (
 echo   ✓ EXE gefunden: dist\rapidmapping_processor\rapidmapping_processor.exe
 echo.
 
-REM Zeige Verzeichnis-Inhalt
-echo   Verzeichnis-Inhalt (Auswahl):
-dir /b dist\rapidmapping_processor | findstr /r "rapidmapping.*\.exe$ .*\.dll$" | more
-echo   ... und weitere Dateien
-echo.
-
-REM Zähle Dateien
 for /f %%A in ('dir /b /a-d "dist\rapidmapping_processor\*" ^| find /c /v ""') do set file_count=%%A
 echo   Gesamt: %file_count% Dateien im Verzeichnis
 echo.
 
-REM ========================================================================
-REM SCHRITT 6 (FORTSETZUNG): TESTE EXE
-REM ========================================================================
-echo   Test: EXE startet (--help)...
-echo.
-
 cd dist\rapidmapping_processor
-
-REM Test 1: Einfacher Start-Test
-echo   Test 1: EXE startet...
+echo   Test: EXE startet (--help)...
 rapidmapping_processor.exe --help >nul 2>&1
-if %errorlevel% equ 0 (
-    echo   ✓ EXE läuft erfolgreich!
-) else (
-    echo   ⚠ EXE hat Runtime-Probleme
-    echo   Versuche manuellen Test: dist\rapidmapping_processor\rapidmapping_processor.exe --help
-)
-
+if %errorlevel% equ 0 (echo   ✓ EXE läuft erfolgreich!) else (echo   ⚠ EXE hat Runtime-Probleme)
 cd ..\..
 echo.
 
-REM ========================================================================
-REM FERTIG
 REM ========================================================================
 echo ========================================================================
 echo   ✓ BUILD ABGESCHLOSSEN
 echo ========================================================================
 echo.
-echo EXE Location:
-echo   %CD%\dist\rapidmapping_processor\rapidmapping_processor.exe
+echo EXE: %CD%\dist\rapidmapping_processor\rapidmapping_processor.exe
+echo.
+echo PROJ/GDAL Fix (was geändert):
+echo   Runtime-Hook entfernt QGIS PROJ_LIB IMMER beim EXE-Start,
+echo   unabhaengig davon ob bundled proj.db gefunden wird.
+echo   Meldung "DATABASE.LAYOUT.VERSION.MINOR" erscheint nicht mehr.
 echo.
 echo WICHTIG - ONEDIR MODUS:
-echo   Die EXE ist jetzt in einem Ordner mit allen Dependencies.
 echo   Verteile den GANZEN ORDNER: dist\rapidmapping_processor\
 echo.
 echo Nächste Schritte:
-echo   1. Erstelle secrets\ Verzeichnis in: dist\rapidmapping_processor\
-echo   2. Kopiere stac_credentials.json nach: dist\rapidmapping_processor\secrets\
-echo   3. Teste: dist\rapidmapping_processor\rapidmapping_processor.exe
-echo.
-echo Für Distribution:
-echo   1. ZIP erstellen: rapidmapping_processor.zip (kompletter Ordner)
-echo   2. User extrahiert ZIP
-echo   3. User startet rapidmapping_processor\rapidmapping_processor.exe
-echo.
-echo Bei Problemen:
-echo   - Prüfe Log: build\rapidmapping_processor\warn-rapidmapping_processor.txt
-echo   - Alle DLLs sind jetzt sichtbar im Verzeichnis
+echo   1. secrets\ Verzeichnis erstellen in: dist\rapidmapping_processor\
+echo   2. stac_credentials.json nach: dist\rapidmapping_processor\secrets\
+echo   3. Testen: dist\rapidmapping_processor\rapidmapping_processor.exe
 echo.
 echo ========================================================================
 echo.
 
 pause
-```
-
-## 📦 Was ändert sich mit `--onedir`?
-
-### Vorher (`--onefile`):
-```
-dist/
-└── rapidmapping_processor.exe  (80-100 MB, komprimiert)
-```
-
-### Nachher (`--onedir`):
-```
-dist/
-└── rapidmapping_processor/
-    ├── rapidmapping_processor.exe  (~500 KB)
-    ├── python312.dll
-    ├── libssl-3-x64.dll
-    ├── libcrypto-3-x64.dll
-    ├── hdf5-xxx.dll
-    ├── ... (viele weitere DLLs)
-    ├── base_library.zip
-    └── ... (~150-200 Dateien, ~100-150 MB gesamt)

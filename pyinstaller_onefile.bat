@@ -9,13 +9,11 @@ echo ========================================================================
 echo   RAPID MAPPING PROCESSOR - SINGLE EXE BUILD
 echo ========================================================================
 echo.
-
 REM ========================================================================
 REM SCHRITT 1: KOMPLETTER CLEANUP
 REM ========================================================================
 echo [1/6] Kompletter Cleanup...
 echo.
-
 echo   - Lösche build\ Verzeichnis...
 if exist build (
     rmdir /s /q build 2>nul
@@ -52,14 +50,9 @@ echo.
 
 REM ========================================================================
 REM SCHRITT 2: QGIS/GDAL UMGEBUNGSVARIABLEN ISOLIEREN
-REM
-REM Problem: QGIS setzt PROJ_LIB / GDAL_DATA als System-Umgebungsvariablen.
-REM          rasterio findet dann QGIS proj.db (Schema v5) statt venv v6+.
-REM Lösung:  Variablen für diesen Build-Prozess leeren.
 REM ========================================================================
 echo [2/6] Isoliere Build-Umgebung von QGIS/GDAL...
 echo.
-
 set PROJ_LIB=
 set PROJ_DATA=
 set PROJ_NETWORK=OFF
@@ -71,16 +64,8 @@ set OSGEO4W_ROOT=
 echo   ✓ PROJ_LIB, GDAL_DATA und QGIS-Pfade für diesen Prozess geleert
 echo   ℹ System-Umgebung bleibt unverändert (nur dieser Prozess betroffen)
 echo.
-
 REM ========================================================================
 REM SCHRITT 3: RUNTIME-HOOK ERSTELLEN
-REM
-REM Die EXE erbt zur Laufzeit QGIS System-Umgebungsvariablen des Benutzers.
-REM
-REM WICHTIGSTE ÄNDERUNG gegenüber einfachem Ansatz:
-REM   Der Hook entfernt QGIS-Pfade IMMER - auch wenn keine gebündelte
-REM   proj.db gefunden wird. Ein fehlender PROJ_LIB ist besser als ein
-REM   falscher (QGIS v5 vs. rasterio v6+).
 REM ========================================================================
 echo [3/6] Erstelle Runtime-Hook (rth_proj_fix.py)...
 echo.
@@ -91,22 +76,19 @@ echo import sys
 echo.
 echo # -----------------------------------------------------------------------
 echo # PyInstaller Runtime-Hook: PROJ / GDAL Pfadkorrektur
-echo # Laeuft als ALLERERSTES beim EXE-Start, vor allen anderen Imports.
 echo # -----------------------------------------------------------------------
 echo if getattr^(sys, "frozen", False^):
 echo     _base = sys._MEIPASS
 echo.
-echo     # --- Schritt 1: QGIS/OSGEO Pfade IMMER entfernen -------------------
-echo     # Unabhaengig davon ob bundled proj.db gefunden wird.
-echo     # Ein fehlender PROJ_LIB ist besser als QGIS v5 vs. rasterio v6+.
-echo     for _var in ^("PROJ_LIB", "PROJ_DATA", "GDAL_DATA",
-echo                  "GDAL_DRIVER_PATH", "GDAL_PLUGINS"^):
+echo     # --- 1: QGIS/OSGEO Pfade IMMER entfernen ---
+echo     for _var in ^("PROJ_LIB", "PROJ_DATA", "GDAL_DATA", "GDAL_DRIVER_PATH", "GDAL_PLUGINS"^):
 echo         _val = os.environ.get^(_var, ""^)
 echo         if any^(k in _val.upper^(^) for k in ^("QGIS", "OSGEO", "OSGEO4W"^)^):
 echo             os.environ.pop^(_var, None^)
 echo.
-echo     # --- Schritt 2: Bundled proj.db setzen (pyproj --collect-data) -----
+echo     # --- 2: Bundled proj.db setzen ---
 echo     for _candidate in ^(
+echo         os.path.join^(_base, "rasterio", "proj_data"^),
 echo         os.path.join^(_base, "pyproj", "proj_dir"^),
 echo         os.path.join^(_base, "proj_dir"^),
 echo         os.path.join^(_base, "share", "proj"^),
@@ -116,18 +98,19 @@ echo             os.environ["PROJ_LIB"]  = _candidate
 echo             os.environ["PROJ_DATA"] = _candidate
 echo             break
 echo.
-echo     # --- Schritt 3: Bundled gdal-data setzen ---------------------------
+echo     # --- 3: Bundled gdal-data setzen ---
 echo     for _candidate in ^(
-echo         os.path.join^(_base, "gdal-data"^),
 echo         os.path.join^(_base, "rasterio", "gdal_data"^),
+echo         os.path.join^(_base, "gdal-data"^),
 echo         os.path.join^(_base, "osgeo", "gdal_data"^),
 echo     ^):
 echo         if os.path.isdir^(_candidate^):
 echo             os.environ.setdefault^("GDAL_DATA", _candidate^)
 echo             break
 echo.
-echo     # --- Schritt 4: PROJ-Netzwerkzugriff deaktivieren ------------------
+echo     # --- 4: PROJ/GDAL Settings optimieren ---
 echo     os.environ.setdefault^("PROJ_NETWORK", "OFF"^)
+echo     os.environ.setdefault^("GTIFF_SRS_SOURCE", "EPSG"^) # Unterdrueckt die nervige EPSG:2056 Warnung
 ) > rth_proj_fix.py
 
 if exist rth_proj_fix.py (
@@ -138,20 +121,17 @@ if exist rth_proj_fix.py (
     exit /b 1
 )
 echo.
-
 REM ========================================================================
 REM SCHRITT 4: DEPENDENCIES PRÜFEN
 REM ========================================================================
 echo [4/6] Prüfe Dependencies...
 echo.
-
 python --version >nul 2>&1
 if %errorlevel% neq 0 (
     echo   ✗ Python nicht gefunden! Bitte zum PATH hinzufügen.
     pause
     exit /b 1
 )
-python --version
 echo   ✓ Python verfügbar
 
 python -c "import PyInstaller" >nul 2>&1
@@ -177,21 +157,12 @@ if %errorlevel% neq 0 (
 ) else (
     echo   ✓ pyproj verfügbar
 )
-
 echo.
-echo   PROJ-Datenpfad aus venv:
-python -c "import pyproj; print('   ', pyproj.datadir.get_data_dir())" 2>nul
-echo.
-
 REM ========================================================================
 REM SCHRITT 5: BUILD MIT --onefile (EINZELNE EXE)
 REM ========================================================================
 echo [5/6] Building Single EXE (--onefile)...
 echo.
-echo   INFO: Runtime-Hook rth_proj_fix.py entfernt QGIS-PROJ-Pfade beim Start.
-echo         Resultat: Eine einzige rapidmapping_processor.exe
-echo.
-
 pyinstaller --noconfirm --console ^
     --onefile ^
     --noupx ^
@@ -211,6 +182,7 @@ pyinstaller --noconfirm --console ^
     --hidden-import=rasterio._shim ^
     --hidden-import=rasterio.sample ^
     --collect-submodules=rasterio ^
+    --collect-data=rasterio ^
     --collect-data=pyproj ^
     --runtime-hook=rth_proj_fix.py ^
     rapidmapping_processor.py
@@ -220,18 +192,6 @@ if %errorlevel% neq 0 (
     echo ========================================================================
     echo   ✗ BUILD FEHLGESCHLAGEN!
     echo ========================================================================
-    echo.
-    echo Mögliche Lösungen:
-    echo   1. Venv ohne QGIS-Einfluss neu erstellen:
-    echo      python -m venv .venv_clean
-    echo      .venv_clean\Scripts\activate
-    echo      pip install -r requirements.txt
-    echo      pip install pyinstaller
-    echo      Dann dieses Skript aus dem aktivierten venv starten.
-    echo.
-    echo   2. Build-Log prüfen:
-    echo      build\rapidmapping_processor\warn-rapidmapping_processor.txt
-    echo.
     if exist rth_proj_fix.py del /q rth_proj_fix.py
     pause
     exit /b 1
@@ -248,7 +208,6 @@ REM SCHRITT 6: PRÜFE OUTPUT UND TESTE
 REM ========================================================================
 echo [6/6] Prüfe Output und teste EXE...
 echo.
-
 if not exist "dist\rapidmapping_processor.exe" (
     echo   ✗ EXE nicht gefunden: dist\rapidmapping_processor.exe
     pause
@@ -257,20 +216,10 @@ if not exist "dist\rapidmapping_processor.exe" (
 
 echo   ✓ EXE gefunden: dist\rapidmapping_processor.exe
 echo.
-
-for %%A in (dist\rapidmapping_processor.exe) do set /a size_mb=%%~zA/1048576
-echo   Dateigröße: %size_mb% MB
-echo.
-
-echo   Inhalt von dist\:
-dir /b dist\
-echo.
-
 echo   Test: EXE startet (--help)...
 dist\rapidmapping_processor.exe --help >nul 2>&1
 if %errorlevel% equ 0 (echo   ✓ EXE läuft erfolgreich!) else (echo   ⚠ EXE hat Runtime-Probleme)
 echo.
-
 REM ========================================================================
 echo ========================================================================
 echo   ✓ BUILD ABGESCHLOSSEN
@@ -278,19 +227,4 @@ echo ========================================================================
 echo.
 echo EXE: %CD%\dist\rapidmapping_processor.exe
 echo.
-echo PROJ/GDAL Fix (was geändert):
-echo   Runtime-Hook entfernt QGIS PROJ_LIB IMMER beim EXE-Start,
-echo   unabhaengig davon ob bundled proj.db gefunden wird.
-echo   Meldung "DATABASE.LAYOUT.VERSION.MINOR" erscheint nicht mehr.
-echo.
-echo Nächste Schritte:
-echo   1. secrets\ Verzeichnis neben EXE erstellen
-echo   2. stac_credentials.json nach secrets\ kopieren
-echo   3. Testen: dist\rapidmapping_processor.exe
-echo.
-echo HINWEIS: Erster Start dauert 5-10s (Entpacken nach %%TEMP%%)
-echo.
-echo ========================================================================
-echo.
-
 pause

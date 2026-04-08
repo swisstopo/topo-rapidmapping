@@ -9,13 +9,11 @@ echo ========================================================================
 echo   RAPID MAPPING PROCESSOR - CLEANUP AND REBUILD (ONEDIR)
 echo ========================================================================
 echo.
-
 REM ========================================================================
 REM SCHRITT 1: KOMPLETTER CLEANUP
 REM ========================================================================
 echo [1/6] Kompletter Cleanup...
 echo.
-
 echo   - Lösche build\ Verzeichnis...
 if exist build (
     rmdir /s /q build 2>nul
@@ -55,7 +53,6 @@ REM SCHRITT 2: QGIS/GDAL UMGEBUNGSVARIABLEN ISOLIEREN
 REM ========================================================================
 echo [2/6] Isoliere Build-Umgebung von QGIS/GDAL...
 echo.
-
 set PROJ_LIB=
 set PROJ_DATA=
 set PROJ_NETWORK=OFF
@@ -67,7 +64,6 @@ set OSGEO4W_ROOT=
 echo   ✓ PROJ_LIB, GDAL_DATA und QGIS-Pfade für diesen Prozess geleert
 echo   ℹ System-Umgebung bleibt unverändert (nur dieser Prozess betroffen)
 echo.
-
 REM ========================================================================
 REM SCHRITT 3: RUNTIME-HOOK ERSTELLEN
 REM
@@ -77,7 +73,6 @@ REM besser als ein falscher (QGIS v5 vs. rasterio v6+).
 REM ========================================================================
 echo [3/6] Erstelle Runtime-Hook (rth_proj_fix.py)...
 echo.
-
 (
 echo import os
 echo import sys
@@ -89,17 +84,15 @@ echo # -----------------------------------------------------------------------
 echo if getattr^(sys, "frozen", False^):
 echo     _base = sys._MEIPASS
 echo.
-echo     # --- Schritt 1: QGIS/OSGEO Pfade IMMER entfernen -------------------
-echo     # Unabhaengig davon ob bundled proj.db gefunden wird.
-echo     # Ein fehlender PROJ_LIB ist besser als QGIS v5 vs. rasterio v6+.
-echo     for _var in ^("PROJ_LIB", "PROJ_DATA", "GDAL_DATA",
-echo                  "GDAL_DRIVER_PATH", "GDAL_PLUGINS"^):
+echo     # --- 1: QGIS/OSGEO Pfade IMMER entfernen ---
+echo     for _var in ^("PROJ_LIB", "PROJ_DATA", "GDAL_DATA", "GDAL_DRIVER_PATH", "GDAL_PLUGINS"^):
 echo         _val = os.environ.get^(_var, ""^)
 echo         if any^(k in _val.upper^(^) for k in ^("QGIS", "OSGEO", "OSGEO4W"^)^):
 echo             os.environ.pop^(_var, None^)
 echo.
-echo     # --- Schritt 2: Bundled proj.db setzen (pyproj --collect-data) -----
+echo     # --- 2: Bundled proj.db setzen ---
 echo     for _candidate in ^(
+echo         os.path.join^(_base, "rasterio", "proj_data"^),
 echo         os.path.join^(_base, "pyproj", "proj_dir"^),
 echo         os.path.join^(_base, "proj_dir"^),
 echo         os.path.join^(_base, "share", "proj"^),
@@ -109,18 +102,19 @@ echo             os.environ["PROJ_LIB"]  = _candidate
 echo             os.environ["PROJ_DATA"] = _candidate
 echo             break
 echo.
-echo     # --- Schritt 3: Bundled gdal-data setzen ---------------------------
+echo     # --- 3: Bundled gdal-data setzen ---
 echo     for _candidate in ^(
-echo         os.path.join^(_base, "gdal-data"^),
 echo         os.path.join^(_base, "rasterio", "gdal_data"^),
+echo         os.path.join^(_base, "gdal-data"^),
 echo         os.path.join^(_base, "osgeo", "gdal_data"^),
 echo     ^):
 echo         if os.path.isdir^(_candidate^):
 echo             os.environ.setdefault^("GDAL_DATA", _candidate^)
 echo             break
 echo.
-echo     # --- Schritt 4: PROJ-Netzwerkzugriff deaktivieren ------------------
+echo     # --- 4: PROJ/GDAL Settings optimieren ---
 echo     os.environ.setdefault^("PROJ_NETWORK", "OFF"^)
+echo     os.environ.setdefault^("GTIFF_SRS_SOURCE", "EPSG"^) # Unterdrueckt die nervige EPSG:2056 Warnung
 ) > rth_proj_fix.py
 
 if exist rth_proj_fix.py (
@@ -131,13 +125,11 @@ if exist rth_proj_fix.py (
     exit /b 1
 )
 echo.
-
 REM ========================================================================
 REM SCHRITT 4: DEPENDENCIES PRÜFEN
 REM ========================================================================
 echo [4/6] Prüfe Dependencies...
 echo.
-
 python --version >nul 2>&1
 if %errorlevel% neq 0 (
     echo   ✗ Python nicht gefunden! Bitte zum PATH hinzufügen.
@@ -175,7 +167,6 @@ echo.
 echo   PROJ-Datenpfad aus venv:
 python -c "import pyproj; print('   ', pyproj.datadir.get_data_dir())" 2>nul
 echo.
-
 REM ========================================================================
 REM SCHRITT 5: REBUILD MIT --onedir (KEINE KOMPRESSION)
 REM ========================================================================
@@ -184,7 +175,6 @@ echo.
 echo   INFO: Runtime-Hook rth_proj_fix.py entfernt QGIS-PROJ-Pfade beim Start.
 echo         Resultat: Ordner mit EXE + DLLs
 echo.
-
 pyinstaller --noconfirm --onedir --console ^
     --noupx ^
     --name rapidmapping_processor ^
@@ -203,6 +193,7 @@ pyinstaller --noconfirm --onedir --console ^
     --hidden-import=rasterio._shim ^
     --hidden-import=rasterio.sample ^
     --collect-submodules=rasterio ^
+    --collect-data=rasterio ^
     --collect-data=pyproj ^
     --runtime-hook=rth_proj_fix.py ^
     rapidmapping_processor.py
@@ -240,7 +231,6 @@ REM SCHRITT 6: PRÜFE OUTPUT UND TESTE
 REM ========================================================================
 echo [6/6] Prüfe Output und teste EXE...
 echo.
-
 if not exist "dist\rapidmapping_processor\rapidmapping_processor.exe" (
     echo   ✗ EXE nicht gefunden!
     echo   Erwartet: dist\rapidmapping_processor\rapidmapping_processor.exe
@@ -250,18 +240,15 @@ if not exist "dist\rapidmapping_processor\rapidmapping_processor.exe" (
 
 echo   ✓ EXE gefunden: dist\rapidmapping_processor\rapidmapping_processor.exe
 echo.
-
 for /f %%A in ('dir /b /a-d "dist\rapidmapping_processor\*" ^| find /c /v ""') do set file_count=%%A
 echo   Gesamt: %file_count% Dateien im Verzeichnis
 echo.
-
 cd dist\rapidmapping_processor
 echo   Test: EXE startet (--help)...
 rapidmapping_processor.exe --help >nul 2>&1
 if %errorlevel% equ 0 (echo   ✓ EXE läuft erfolgreich!) else (echo   ⚠ EXE hat Runtime-Probleme)
 cd ..\..
 echo.
-
 REM ========================================================================
 echo ========================================================================
 echo   ✓ BUILD ABGESCHLOSSEN

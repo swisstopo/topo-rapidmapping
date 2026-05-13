@@ -54,6 +54,7 @@ class ProductType(Enum):
     """Verfügbare Rapid Mapping Produkttypen."""
     QDOP_RGB = "qdop-rgb"
     QDOP_NRG = "qdop-nrg"
+    QDOP_DMC4 = "qdop-dmc4"  # DMC4 4-Kanal Streifen → erzeugt RGB + NRG
     EBN = "ebn"  # Einzelbilder Nadir
     EBO = "ebo"  # Einzelbilder Oblique
 

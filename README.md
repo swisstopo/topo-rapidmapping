@@ -14,6 +14,7 @@ in einem einzigen, benutzerfreundlichen Workflow mit automatischer Proxy-Erkennu
 ### ⚡ Hauptfeatures
 
 - ✅ **Single COG-File Workflow**: Prüft ob Input bereits COG-konform ist (8-bit RGB, 3 Bänder)
+- ✅ **DMC4-Workflow**: Verarbeitet 4-Kanal DMC4-Bildstreifen automatisch zu RGB + NRG COG
 - ✅ **Automatische Proxy-Erkennung**: VPN- und Corporate-Proxy-Support mit SSL-Handling
 - ✅ **EXIF-Extraktion**: GPS und Zeitstempel aus Einzelbildern
 - ✅ **KML-Overview**: Automatische Generierung via STAC-Abfrage nach Upload
@@ -198,6 +199,7 @@ Das Script führt durch folgende Schritte:
    - QDOP NRG Mosaic
    - Einzelbilder Nadir (EBN)
    - Einzelbilder Oblique (EBO)
+   - QDOP-DMC4 (4-Kanal DMC4-Streifen → RGB + NRG)
 4. **Zeitstempel** (bei Mosaiken) oder nur Datum (bei Einzelbildern)
 5. **Bestätigung** und Start
 
@@ -222,14 +224,14 @@ Das Script führt durch folgende Schritte:
    └─ Erstelle Thumbnail (thumbnail.jpg, 256px)
 
 3. STAC-Upload
-   ├─ Asset: ram-YYYY-MM-DDthhmmss-qdop-rgb-mosaic.tif
+   ├─ Asset: ram-YYYY-MM-DDthhmmsscc-qdop-rgb-mosaic.tif
    └─ Asset: thumbnail.jpg
 ```
 
 #### Output-Naming
 ```
-Item:  ram-2024-07-15t143000-qdop-rgb-mosaic
-Asset: ram-2024-07-15t143000-qdop-rgb-mosaic.tif
+Item:  ram-2024-07-15t14300000
+Asset: ram-2024-07-15t14300000-qdop-rgb-mosaic.tif
 Asset: thumbnail.jpg
 ```
 
@@ -274,32 +276,73 @@ Script gibt Fehler aus mit Anleitung zur COG-Konvertierung:
 
 2. Nach allen Uploads:
    ├─ Generiere Download-Liste
-   │  → YYYY-MM-DD-ebn.txt (alle URLs)
+   │  → ram-YYYY-MM-DDt23595900-ebn.txt (alle URLs)
    │
    └─ Generiere KML-Overview (via STAC-Abfrage)
       ├─ Abfrage: Alle Items des Tages
       ├─ Erstelle KML mit Placemarks
       │  └─ Icon, Thumbnail, GPS-Position
-      └─ Upload als: ram-YYYY-MM-DDt235959-ebn-overview.kml
+      └─ Upload als: ram-YYYY-MM-DDt23595900-ebn.kml
 ```
 
 #### Output-Naming (pro Foto)
 ```
-Item:  ram-2024-07-15t120523-ebn
-Asset: ram-2024-07-15t120523-ebn.jpg (Original)
+Item:  ram-2024-07-15t12052300-ebn
+Asset: ram-2024-07-15t12052300-ebn.jpg (Original)
 Asset: thumbnail.jpg (640x480px Thumbnail)
 ```
 
 #### Output-Naming (KML-Overview)
 ```
-Item:  ram-2024-07-15t235959-ebn-overview
-Asset: ram-2024-07-15t235959-ebn-overview.kml
+Item:  ram-2024-07-15t23595900
+Asset: ram-2024-07-15t23595900-ebn.kml
+Asset: ram-2024-07-15t23595900-ebn.txt
 ```
 
 #### GPS-Koordinaten Handling
 - **DMS → Dezimal-Konvertierung** (6 Dezimalstellen Präzision)
 - **Warnung bei fehlenden GPS-Daten**: Foto wird übersprungen
 - **KML**: Nur Fotos mit GPS-Daten werden eingebunden
+
+### 3. QDOP-DMC4 (4-Kanal DMC4-Bildstreifen)
+
+#### Input Requirements
+- **Verzeichnis mit einem oder mehreren 4-Band TIF-Streifen**
+- **Kein CRS zugewiesen** — Daten liegen in EPSG:2056 (LV95), werden automatisch zugewiesen
+- **Bandstruktur**: Band 1 = Rot, Band 2 = Grün, Band 3 = Blau, Band 4 = Nahinfrarot
+
+#### Workflow
+```
+1. Alle .tif-Streifen im Input-Verzeichnis finden
+
+2. Pro Streifen (gdal_translate):
+   ├─ CRS EPSG:2056 zuweisen
+   ├─ Bänder 1,2,3 extrahieren → RGB-Streifen
+   └─ Bänder 4,1,2 extrahieren → NRG-Streifen (Nahinfrarot, Rot, Grün)
+
+3. VRT-Mosaike bauen (gdalbuildvrt)
+   ├─ Alle RGB-Streifen → mosaic_rgb.vrt
+   └─ Alle NRG-Streifen → mosaic_nrg.vrt
+
+4. COG-Konvertierung (gdal_translate -of COG)
+   ├─ mosaic_rgb.vrt → ram-YYYY-MM-DDthhmmsscc-qdop-rgb-mosaic.tif
+   └─ mosaic_nrg.vrt → ram-YYYY-MM-DDthhmmsscc-qdop-nrg-mosaic.tif
+
+5. Thumbnail aus RGB-COG erstellen (thumbnail.jpg, 256px)
+
+6. STAC-Upload (alle drei Assets im selben Item)
+   ├─ Asset: ram-...-qdop-rgb-mosaic.tif
+   ├─ Asset: ram-...-qdop-nrg-mosaic.tif
+   └─ Asset: thumbnail.jpg
+```
+
+#### Output-Naming
+```
+Item:  ram-2024-07-15t14300000
+Asset: ram-2024-07-15t14300000-qdop-rgb-mosaic.tif
+Asset: ram-2024-07-15t14300000-qdop-nrg-mosaic.tif
+Asset: thumbnail.jpg
+```
 
 ## 🗺️ KML-Overview Generation
 
@@ -341,31 +384,36 @@ Nach Upload aller Einzelbilder wird automatisch ein KML-Overview erstellt:
 
 ### Format
 ```
-ram-YYYY-MM-DDthhmmss-{product}-{type}.ext
+STAC Item:  ram-YYYY-MM-DDthhmmsscc
+Asset:      ram-YYYY-MM-DDthhmmsscc-{product}-{type}.ext
 
 Komponenten:
 - ram:          Rapid Mapping Prefix
 - YYYY-MM-DD:   Datum
 - t:            Separator
-- hhmmss:       Zeit (UTC)
+- hhmmsscc:     Zeit (UTC) mit 2-stelligen Hundertelsekunden (default: 00)
 - {product}:    qdop-rgb | qdop-nrg | ebn | ebo
-- {type}:       mosaic | photo | overview (optional)
-- .ext:         .tif | .jpg | .kml
+- {type}:       mosaic | photo (optional)
+- .ext:         .tif | .jpg | .kml | .txt
 ```
 
 ### Beispiele
 ```
-Mosaike:
-- ram-2024-07-15t143000-qdop-rgb-mosaic.tif
-- ram-2024-07-15t143000-qdop-nrg-mosaic.tif
+Mosaike (QDOP-RGB, QDOP-NRG, QDOP-DMC4):
+- Item:  ram-2024-07-15t14300000
+- Assets:ram-2024-07-15t14300000-qdop-rgb-mosaic.tif
+         ram-2024-07-15t14300000-qdop-nrg-mosaic.tif
+         thumbnail.jpg
 
 Einzelbilder:
-- ram-2024-07-15t120523-ebn.jpg
-- ram-2024-07-15t134512-ebo.jpg
+- ram-2024-07-15t12052300-ebn-photo.jpg
+- ram-2024-07-15t13451200-ebo-photo.jpg
 
-Overview:
-- ram-2024-07-15t235959-ebn-overview.kml
-- ram-2024-07-15t235959-ebo-overview.kml
+Overview (KML + Downloadliste) — Zeitstempel 23:59:59.00:
+- ram-2024-07-15t23595900-ebn.kml
+- ram-2024-07-15t23595900-ebn.txt
+- ram-2024-07-15t23595900-ebo.kml
+- ram-2024-07-15t23595900-ebo.txt
 
 Thumbnails:
 - thumbnail.jpg (immer gleicher Name pro Item)
@@ -373,12 +421,12 @@ Thumbnails:
 
 ### STAC Item IDs
 ```
-Format: ram-YYYY-MM-DDthhmmss-{product}
+Format: ram-YYYY-MM-DDthhmmsscc  (kein Produktsuffix im Item-Namen)
 
 Beispiele:
-- ram-2024-07-15t143000-qdop-rgb-mosaic
-- ram-2024-07-15t120523-ebn
-- ram-2024-07-15t235959-ebn-overview
+- ram-2024-07-15t14300000          (QDOP RGB/NRG/DMC4-Mosaic)
+- ram-2024-07-15t12052300          (Einzelbild EBN oder EBO)
+- ram-2024-07-15t23595900          (KML-Overview-Item EBN oder EBO)
 ```
 
 ## 🔧 Konfigurationsdateien
@@ -408,10 +456,11 @@ THUMBNAIL_CONFIG = {
 
 # Produkttypen
 class ProductType(Enum):
-    QDOP_RGB = "qdop-rgb"
-    QDOP_NRG = "qdop-nrg"
-    EBN = "ebn"  # Einzelbilder Nadir
-    EBO = "ebo"  # Einzelbilder Oblique
+    QDOP_RGB  = "qdop-rgb"
+    QDOP_NRG  = "qdop-nrg"
+    QDOP_DMC4 = "qdop-dmc4"  # DMC4 4-Kanal Streifen → erzeugt RGB + NRG
+    EBN       = "ebn"         # Einzelbilder Nadir
+    EBO       = "ebo"         # Einzelbilder Oblique
 ```
 
 ## 🛠️ Troubleshooting
@@ -514,40 +563,62 @@ temp/
 
 ## 📄 Workflow-Diagramm
 
-### Orthophoto-Mosaike
+### Orthophoto-Mosaike (QDOP-RGB / QDOP-NRG)
 ```
-Input Directory (1 TIF-Datei)
+Input Directory (1 COG-TIF-Datei, 8-bit RGB)
     │
     ├─ Single-File-Check
     │  ├─ Ist COG? (Tiled + Overviews)
     │  └─ Ist 8-bit RGB? (3 Bänder, Byte)
     │
     ├─ Copy zu temp_dir
-    │  └─ ram-YYYY-MM-DDthhmmss-qdop-rgb-mosaic.tif
+    │  └─ ram-YYYY-MM-DDthhmmsscc-qdop-rgb-mosaic.tif
     │
     ├─ Erstelle Thumbnail
     │  └─ thumbnail.jpg (256px)
     │
-    └─ STAC-Upload
+    └─ STAC-Upload → Item: ram-YYYY-MM-DDthhmmsscc
        ├─ Asset: .tif
        └─ Asset: thumbnail.jpg
 ```
 
-### Einzelbilder
+### DMC4-Bildstreifen (QDOP-DMC4)
 ```
-Input Directory (Multiple JPEGs)
+Input Directory (n × 4-Band TIF-Streifen, kein CRS)
+    │
+    ├─ Pro Streifen: CRS EPSG:2056 zuweisen + Bänder extrahieren
+    │  ├─ Bänder 1,2,3 → RGB-Streifen
+    │  └─ Bänder 4,1,2 → NRG-Streifen
+    │
+    ├─ gdalbuildvrt → mosaic_rgb.vrt + mosaic_nrg.vrt
+    │
+    ├─ gdal_translate -of COG
+    │  ├─ ram-YYYY-MM-DDthhmmsscc-qdop-rgb-mosaic.tif
+    │  └─ ram-YYYY-MM-DDthhmmsscc-qdop-nrg-mosaic.tif
+    │
+    ├─ Thumbnail aus RGB-COG → thumbnail.jpg (256px)
+    │
+    └─ STAC-Upload → Item: ram-YYYY-MM-DDthhmmsscc
+       ├─ Asset: -qdop-rgb-mosaic.tif
+       ├─ Asset: -qdop-nrg-mosaic.tif
+       └─ Asset: thumbnail.jpg
+```
+
+### Einzelbilder (EBN / EBO)
+```
+Input Directory (Multiple JPEGs mit EXIF+GPS)
     │
     └─ Für jedes Foto:
        │
        ├─ EXIF extrahieren (GPS + Zeit)
        │
        ├─ Copy + Rename zu temp_dir
-       │  └─ ram-YYYY-MM-DDthhmmss-ebn.jpg
+       │  └─ ram-YYYY-MM-DDthhmmsscc-ebn-photo.jpg
        │
        ├─ Erstelle Thumbnail
        │  └─ thumbnail.jpg (640x480px)
        │
-       ├─ STAC-Upload
+       ├─ STAC-Upload → Item: ram-YYYY-MM-DDthhmmsscc
        │  ├─ Asset: .jpg
        │  └─ Asset: thumbnail.jpg
        │
@@ -556,12 +627,14 @@ Input Directory (Multiple JPEGs)
 Nach allen Uploads:
     │
     ├─ Generiere Download-Liste
-    │  └─ YYYY-MM-DD-ebn.txt
+    │  └─ ram-YYYY-MM-DDt23595900-ebn.txt
     │
     └─ Generiere KML-Overview
        ├─ STAC-Abfrage: Alle Items des Tages
        ├─ Erstelle KML mit Placemarks
-       └─ STAC-Upload: ram-YYYY-MM-DDt235959-ebn-overview.kml
+       └─ STAC-Upload → Item: ram-YYYY-MM-DDt23595900
+          ├─ Asset: ram-YYYY-MM-DDt23595900-ebn.kml
+          └─ Asset: ram-YYYY-MM-DDt23595900-ebn.txt
 ```
 
 ## 🤝 Integration mit bestehenden Scripts
@@ -599,19 +672,20 @@ __pycache__/
 
 Nach erfolgreichem Upload gibt das Script URLs aus für die Integration auf rapidmapping.ch:
 
-### Orthophotos
+### Orthophotos (QDOP-RGB / QDOP-NRG / QDOP-DMC4)
 ```
 Nächster Schritt für Quick Digital Orthophoto RGB:
-1) URL öffnen: https://map.geo.admin.ch/#/map?layers=COG|https://data.geo.admin.ch/ch.swisstopo.spezialbefliegungen/ram-2024-07-15t143000-qdop-rgb-mosaic/ram-2024-07-15t143000-qdop-rgb-mosaic.tif
-2) Kartenausschnitt: als iFrame in rapidmapping.ch integrieren
+  RGB: https://map.geo.admin.ch/#/map?layers=COG|https://data.geo.admin.ch/ch.swisstopo.spezialbefliegungen/ram-2024-07-15t14300000/ram-2024-07-15t14300000-qdop-rgb-mosaic.tif
+  NRG: https://map.geo.admin.ch/#/map?layers=COG|https://data.geo.admin.ch/ch.swisstopo.spezialbefliegungen/ram-2024-07-15t14300000/ram-2024-07-15t14300000-qdop-nrg-mosaic.tif
+Kartenausschnitt: als iFrame in rapidmapping.ch integrieren
 ```
 
-### Einzelbilder
+### Einzelbilder (EBN / EBO)
 ```
 Nächster Schritt für Einzelbilder Nadir:
-1) URL öffnen: https://map.geo.admin.ch/#/map?layers=KML|https://data.geo.admin.ch/ch.swisstopo.spezialbefliegungen/ram-2024-07-15t235959-ebn-overview/ram-2024-07-15t235959-ebn-overview.kml
-2) Kartenausschnitt: als iFrame in rapidmapping.ch integrieren
-3) Downloadliste: 2024-07-15-ebn.txt
+  Karte:  https://map.geo.admin.ch/#/map?layers=KML|https://data.geo.admin.ch/ch.swisstopo.spezialbefliegungen/ram-2024-07-15t23595900/ram-2024-07-15t23595900-ebn.kml
+  Liste:  https://data.geo.admin.ch/ch.swisstopo.spezialbefliegungen/ram-2024-07-15t23595900/ram-2024-07-15t23595900-ebn.txt
+Kartenausschnitt: als iFrame in rapidmapping.ch integrieren
 ```
 
 ## 🛠️ Utilities
@@ -661,14 +735,17 @@ python rapidmapping_processor.py --product qdop-nrg --input /data --timestamp 20
 python rapidmapping_processor.py --product ebn --input /data --timestamp 2025-09-03 --upload=False
 
 # Debug + lokal 
-python rapidmapping_processor.py --product ebn --input /data --timestamp 2025-09-03 --upload=False --debug 
+python rapidmapping_processor.py --product ebn --input /data --timestamp 2025-09-03 --upload=False --debug
+
+# QDOP-DMC4 (4-Kanal Bildstreifen → erzeugt RGB + NRG)
+python rapidmapping_processor.py --product qdop-dmc4 --input /data/dmc4 --timestamp 2024-07-15t143000
 ```
 
 ### Parameter-Übersicht
 
 | Parameter | Werte | Beschreibung |
 |-----------|-------|--------------|
-| `--product` | `ebn`, `ebo`, `qdop-rgb`, `qdop-nrg` | Produkttyp |
+| `--product` | `ebn`, `ebo`, `qdop-rgb`, `qdop-nrg`, `qdop-dmc4` | Produkttyp |
 | `--input` | Pfad | Quellverzeichnis mit Eingabedaten |
 | `--timestamp` | `YYYY-MM-DD` oder `YYYY-MM-DDthhmmss[cc]` | Datum/Zeitstempel |
 | `--upload` | `True` / `False` | Upload zu STAC (False → ./output/) |
@@ -714,7 +791,7 @@ Assets: ram-2024-07-15t14300000-qdop-rgb-mosaic.tif
 ### EBN / EBO Einzelbilder
 
 ```
-Item:   ram-2025-09-03t12523700-ebn-photo
+Item:   ram-2025-09-03t12523700
 Assets: ram-2025-09-03t12523700-ebn-photo.jpg
         thumbnail.jpg
 ```
@@ -860,6 +937,12 @@ Bei Problemen:
 MIT
 
 ## ✨ Version History
+
+### v2.2 (2025-05)
+- ✅ **QDOP-DMC4**: Neuer Produkttyp für 4-Kanal DMC4-Bildstreifen (→ RGB + NRG COG)
+- ✅ **Overview-Naming**: Kein `-overview`-Suffix mehr im STAC Item-Namen; Produktkürzel (`ebn`/`ebo`) im Asset-Dateinamen
+- ✅ **EBO-Overview-Icon**: Korrektes Kamera-Icon für EBO KML-Overview-Items
+- ✅ Alle Item-Namen und Assets enthalten immer 2-stelligen Hundertelsekunden-Suffix (`cc`, default `00`)
 
 ### v2.0 (2025-01)
 - ✅ Single COG-File Workflow (kein Mosaic mehr im Script)

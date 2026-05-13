@@ -130,7 +130,6 @@ def item_create_json_payload(id, coordinates, dt_iso8601, title, geocat_id, curr
     """
     domain = f"https://{stac_hostname}/"
     asset_lower = asset.lower()
-    id_lower = id.lower()
 
     if "-ebo-photo" in asset_lower:
         config = get_product_config(ProductType.EBO)
@@ -138,8 +137,11 @@ def item_create_json_payload(id, coordinates, dt_iso8601, title, geocat_id, curr
     elif "-ebn-photo" in asset_lower:
         config = get_product_config(ProductType.EBN)
         thumbnail_url = config['icon_url']
-    elif asset_lower.endswith('.kml') and 'overview' in id_lower:
-        config = get_product_config(ProductType.EBN)
+    elif asset_lower.endswith('.kml'):
+        if 'ebo' in asset_lower:
+            config = get_product_config(ProductType.EBO)
+        else:
+            config = get_product_config(ProductType.EBN)
         thumbnail_url = config['icon_url']
     else:
         thumbnail_url = f"{domain}{STAC_COLLECTION}/{id}/thumbnail.jpg"

@@ -81,11 +81,13 @@ def prompt_product_type():
     print("   2) QDOP NRG Mosaic (Orthophoto Nahinfrarot)")
     print("   3) EBN - Einzelbilder Nadir (Senkrecht)")
     print("   4) EBO - Einzelbilder Oblique (Schrägaufnahmen)")
+    print("   5) QDOP-DMC4 (4-Kanal DMC4-Streifen → RGB + NRG)")
     choices = {
         '1': ProductType.QDOP_RGB,
         '2': ProductType.QDOP_NRG,
         '3': ProductType.EBN,
-        '4': ProductType.EBO
+        '4': ProductType.EBO,
+        '5': ProductType.QDOP_DMC4,
     }
     while True:
         choice = input("-> ").strip()
@@ -94,7 +96,7 @@ def prompt_product_type():
             logger.info(f"✓ Produkttyp gewählt: {product.value}")
             return product
         else:
-            logger.error("✗ Ungültige Auswahl. Bitte 1-4 eingeben.")
+            logger.error("✗ Ungültige Auswahl. Bitte 1-5 eingeben.")
 
 
 def prompt_timestamp(product_type):
@@ -224,6 +226,167 @@ def process_mosaic_workflow(
         return False
 
 
+def process_dmc4_workflow(
+    input_dir, timestamp, upload_enabled, environment, hostname,
+    debug: bool = False,
+):
+    """
+    Workflow für DMC4 4-Kanal Bildstreifen.
+
+    Eingabe: Verzeichnis mit 4-Band TIF-Streifen (kein CRS, Daten in EPSG:2056).
+    Bänder: 1=Rot, 2=Grün, 3=Blau, 4=Nahinfrarot.
+
+    Schritte:
+      1. Alle .tif-Dateien im Input-Verzeichnis finden
+      2. Für jeden Streifen: CRS EPSG:2056 zuweisen + Bänder extrahieren
+         - RGB: Bänder 1, 2, 3
+         - NRG: Bänder 4, 1, 2 (Nahinfrarot, Rot, Grün)
+      3. VRT-Mosaike bauen (RGB + NRG)
+      4. Als COG konvertieren
+      5. Thumbnail aus RGB-COG erstellen
+      6. RGB-COG, NRG-COG und Thumbnail ins gleiche STAC-Item hochladen
+    """
+    import tempfile
+    import subprocess as _sp
+    from utilities.file_handler import get_tif_files
+    from utilities.mosaic_processor import create_thumbnail_from_cog
+
+    try:
+        output_dir = Path("output") if not upload_enabled else Path("temp")
+        output_dir.mkdir(exist_ok=True)
+
+        timestamp_ms   = _ensure_ms_suffix(timestamp)
+        # Both RGB and NRG share the same item name (no product suffix in item)
+        item_name      = generate_item_name(timestamp_ms, ProductType.QDOP_RGB)
+        config_rgb     = get_product_config(ProductType.QDOP_RGB)
+        config_nrg     = get_product_config(ProductType.QDOP_NRG)
+        asset_name_rgb = generate_asset_name(timestamp_ms, ProductType.QDOP_RGB)
+        asset_name_nrg = generate_asset_name(timestamp_ms, ProductType.QDOP_NRG)
+
+        logger.info("=" * 70)
+        logger.info("DMC4 PROCESSING (RGB + NRG)")
+        logger.info("=" * 70)
+        logger.info(f"STAC Item:      {item_name}")
+        logger.info(f"STAC Asset RGB: {asset_name_rgb}")
+        logger.info(f"STAC Asset NRG: {asset_name_nrg}")
+
+        input_files = get_tif_files(input_dir, recursive=False)
+        if not input_files:
+            logger.error("✗ Keine TIFF-Dateien im Input-Verzeichnis gefunden!")
+            return False
+        logger.info(f"\nGefunden: {len(input_files)} DMC4 Streifen")
+
+        cog_rgb = output_dir / asset_name_rgb
+        cog_nrg = output_dir / asset_name_nrg
+
+        with tempfile.TemporaryDirectory() as _tmp:
+            tmp   = Path(_tmp)
+            t_rgb = tmp / "rgb"
+            t_nrg = tmp / "nrg"
+            t_rgb.mkdir()
+            t_nrg.mkdir()
+
+            # Step 1: extract bands + assign CRS for each stripe
+            for tif in input_files:
+                stem = tif.stem
+                for label, bands, out_dir in [
+                    ("RGB", ["1", "2", "3"], t_rgb),
+                    ("NRG", ["4", "1", "2"], t_nrg),
+                ]:
+                    out = out_dir / f"{stem}_{label.lower()}.tif"
+                    cmd = ["gdal_translate", "-a_srs", "EPSG:2056"]
+                    for b in bands:
+                        cmd += ["-b", b]
+                    cmd += [str(tif), str(out)]
+                    r = _sp.run(cmd, capture_output=True, text=True)
+                    if r.returncode != 0:
+                        logger.error(f"✗ gdal_translate {label} fehlgeschlagen: {tif.name}")
+                        logger.error(r.stderr)
+                        return False
+
+            logger.info("✓ Bänder extrahiert und CRS EPSG:2056 zugewiesen")
+
+            # Step 2: build VRT mosaics
+            for label, src_dir, vrt_name in [
+                ("RGB", t_rgb, "mosaic_rgb.vrt"),
+                ("NRG", t_nrg, "mosaic_nrg.vrt"),
+            ]:
+                vrt = tmp / vrt_name
+                files = sorted(str(f) for f in src_dir.glob("*.tif"))
+                r = _sp.run(["gdalbuildvrt", str(vrt)] + files,
+                            capture_output=True, text=True)
+                if r.returncode != 0:
+                    logger.error(f"✗ gdalbuildvrt {label} fehlgeschlagen")
+                    logger.error(r.stderr)
+                    return False
+
+            logger.info("✓ VRT-Mosaike erstellt")
+
+            # Step 3: convert VRTs to COG
+            for label, vrt_name, cog in [
+                ("RGB", "mosaic_rgb.vrt", cog_rgb),
+                ("NRG", "mosaic_nrg.vrt", cog_nrg),
+            ]:
+                logger.info(f"  Erstelle COG {label}: {cog.name}")
+                r = _sp.run([
+                    "gdal_translate", "-of", "COG",
+                    "-co", "COMPRESS=JPEG", "-co", "QUALITY=75",
+                    "-co", "BIGTIFF=YES",
+                    str(tmp / vrt_name), str(cog)
+                ], capture_output=True, text=True)
+                if r.returncode != 0:
+                    logger.error(f"✗ COG-Konvertierung {label} fehlgeschlagen")
+                    logger.error(r.stderr)
+                    return False
+
+        logger.info("✓ COG-Dateien erstellt")
+
+        # Step 4: thumbnail from RGB COG
+        thumbnail_file = output_dir / "thumbnail.jpg"
+        create_thumbnail_from_cog(cog_rgb, thumbnail_file, max_size=256)
+
+        if not upload_enabled:
+            logger.info(f"i Upload deaktiviert. Dateien gespeichert in: {output_dir}")
+            return True
+
+        # Step 5: upload RGB, NRG and thumbnail to the same STAC item
+        ok_rgb = publish_to_stac_wrapper(
+            asset_path=cog_rgb, item_name=item_name,
+            collection=STAC_COLLECTION, geocat_id=GEOCAT_ID,
+            hostname=hostname, asset_title=config_rgb['asset_title'],
+            environment=environment
+        )
+        ok_nrg = publish_to_stac_wrapper(
+            asset_path=cog_nrg, item_name=item_name,
+            collection=STAC_COLLECTION, geocat_id=GEOCAT_ID,
+            hostname=hostname, asset_title=config_nrg['asset_title'],
+            environment=environment
+        )
+        if thumbnail_file.exists():
+            publish_to_stac_wrapper(
+                asset_path=thumbnail_file, item_name=item_name,
+                collection=STAC_COLLECTION, geocat_id=GEOCAT_ID,
+                hostname=hostname, asset_title="THUMBNAIL",
+                environment=environment
+            )
+
+        if ok_rgb and ok_nrg:
+            cleanup_temp_directory(output_dir)
+            logger.info("\n" + "=" * 70)
+            logger.info(f"Nächster Schritt: URL für rapidmapping.ch")
+            logger.info(f"  RGB: https://map.geo.admin.ch/#/map?layers=COG|{STAC_SCHEME}://{hostname}/{STAC_COLLECTION}/{item_name}/{asset_name_rgb}")
+            logger.info(f"  NRG: https://map.geo.admin.ch/#/map?layers=COG|{STAC_SCHEME}://{hostname}/{STAC_COLLECTION}/{item_name}/{asset_name_nrg}")
+            logger.info("=" * 70)
+
+        return ok_rgb and ok_nrg
+
+    except Exception as e:
+        logger.error(f"✗ Fehler im DMC4-Workflow: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return False
+
+
 def process_photos_workflow(
     input_dir, product_type, date, upload_enabled, environment, hostname,
     debug: bool = False,
@@ -295,8 +458,9 @@ def process_photos_workflow(
 
             # NEU v2.2: Overview-Item mit ms-Suffix "00"
             kml_timestamp  = f"{date}t23595900"
-            kml_item_name  = generate_item_name(kml_timestamp, product_type) + "-overview"
-            kml_asset_name = kml_item_name + ".kml"
+            kml_item_name  = generate_item_name(kml_timestamp, product_type)
+            product_short  = config['suffix'].split('-')[0]  # 'ebn' or 'ebo'
+            kml_asset_name = f"{kml_item_name}-{product_short}.kml"
             kml_file       = temp_dir / kml_asset_name
 
             kml_success = create_overview_kml(
@@ -325,7 +489,7 @@ def process_photos_workflow(
                 logger.info("GENERIERE CSV AUS STAC")
                 logger.info("=" * 70)
 
-                csv_asset_name = kml_item_name + ".txt"
+                csv_asset_name = f"{kml_item_name}-{product_short}.txt"
                 csv_file       = temp_dir / csv_asset_name
 
                 csv_ok = generate_csv_from_stac(
@@ -359,7 +523,7 @@ def process_photos_workflow(
             if kml_item_name:
                 csv_stac_url = (
                     f"{STAC_SCHEME}://{hostname}/{STAC_COLLECTION}"
-                    f"/{kml_item_name}/{kml_item_name}.txt"
+                    f"/{kml_item_name}/{csv_asset_name}"
                 )
                 # Links immer ausgeben — auch im non-debug Modus
                 print("\n" + "=" * 70)
@@ -438,8 +602,8 @@ def main():
                         metavar='VERZEICHNIS',
                         help='Quellverzeichnis mit Eingabedaten')
     parser.add_argument('--product', dest='product', default=None,
-                        choices=['ebn', 'ebo', 'qdop-rgb', 'qdop-nrg'],
-                        help='Produkttyp: ebn, ebo, qdop-rgb, qdop-nrg')
+                        choices=['ebn', 'ebo', 'qdop-rgb', 'qdop-nrg', 'qdop-dmc4'],
+                        help='Produkttyp: ebn, ebo, qdop-rgb, qdop-nrg, qdop-dmc4')
     parser.add_argument('--timestamp', '--date', dest='timestamp', default=None,
                         metavar='TIMESTAMP',
                         help=('Zeitstempel/Datum. '
@@ -473,6 +637,7 @@ def main():
         _product_map = {
             'ebn': ProductType.EBN, 'ebo': ProductType.EBO,
             'qdop-rgb': ProductType.QDOP_RGB, 'qdop-nrg': ProductType.QDOP_NRG,
+            'qdop-dmc4': ProductType.QDOP_DMC4,
         }
 
         if args.input_dir:
@@ -549,6 +714,12 @@ def main():
         if product_type in [ProductType.QDOP_RGB, ProductType.QDOP_NRG]:
             success = process_mosaic_workflow(
                 input_dir, product_type, timestamp_or_date,
+                args.upload, environment, hostname,
+                debug=args.debug
+            )
+        elif product_type == ProductType.QDOP_DMC4:
+            success = process_dmc4_workflow(
+                input_dir, timestamp_or_date,
                 args.upload, environment, hostname,
                 debug=args.debug
             )

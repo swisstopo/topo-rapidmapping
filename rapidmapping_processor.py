@@ -134,6 +134,27 @@ def _ensure_ms_suffix(timestamp: str) -> str:
     return timestamp
 
 
+def _run_gdal(label: str, cmd: list) -> bool:
+    """
+    Run a GDAL subprocess with live progress output.
+
+    Prints a labelled header line, then lets GDAL's own -progress output go
+    straight to the terminal (stdout inherited).  Only stderr is captured so
+    we can log it on failure.
+
+    Returns True on success, False on non-zero exit.
+    """
+    import subprocess as _sp
+    logger.info(f"  → {label}")
+    result = _sp.run(cmd + ["-progress"], stderr=_sp.PIPE, text=True)
+    if result.returncode != 0:
+        logger.error(f"    ✗ fehlgeschlagen (exit {result.returncode})")
+        if result.stderr.strip():
+            logger.error(result.stderr.strip())
+        return False
+    return True
+
+
 def process_mosaic_workflow(
     input_dir, product_type, timestamp, upload_enabled, environment, hostname,
     debug: bool = False,
@@ -247,7 +268,7 @@ def process_dmc4_workflow(
       6. RGB-COG, NRG-COG und Thumbnail ins gleiche STAC-Item hochladen
     """
     import tempfile
-    import subprocess as _sp
+    import subprocess as _sp  # used for gdalbuildvrt (no -progress support)
     from utilities.file_handler import get_tif_files
     from utilities.mosaic_processor import create_thumbnail_from_cog
 
@@ -286,9 +307,10 @@ def process_dmc4_workflow(
             t_rgb.mkdir()
             t_nrg.mkdir()
 
-            # Step 1: extract bands + assign CRS + set nodata for each stripe
-            # Nodata definition: all 4 source bands == 0 → transparent in mosaic
-            for tif in input_files:
+            # Step 1: extract bands + assign CRS + tag nodata for each stripe
+            # -a_nodata 0 tags nodata in output metadata; gdalbuildvrt reads it
+            total = len(input_files)
+            for idx, tif in enumerate(input_files, 1):
                 stem = tif.stem
                 for label, bands, out_dir in [
                     ("RGB", ["1", "2", "3"], t_rgb),
@@ -298,33 +320,34 @@ def process_dmc4_workflow(
                     cmd = ["gdal_translate", "-a_srs", "EPSG:2056"]
                     for b in bands:
                         cmd += ["-b", b]
-                    # Tag nodata=0 on all output bands; gdalbuildvrt uses this
-                    # to skip all-zero pixels when compositing the mosaic
-                    cmd += ["-a_nodata", "0"]
-                    cmd += [str(tif), str(out)]
-                    r = _sp.run(cmd, capture_output=True, text=True)
-                    if r.returncode != 0:
-                        logger.error(f"✗ gdal_translate {label} fehlgeschlagen: {tif.name}")
-                        logger.error(r.stderr)
+                    cmd += ["-a_nodata", "0", str(tif), str(out)]
+                    if not _run_gdal(
+                        f"[{idx}/{total}] Streifen {label}: {tif.name}", cmd
+                    ):
                         return False
 
             logger.info("✓ Bänder extrahiert und CRS EPSG:2056 zugewiesen (nodata=0)")
 
             # Step 2: build VRT mosaics — honour nodata so stripe gaps are transparent
+            # gdalbuildvrt does not support -progress, run quietly
+            import subprocess as _sp
             for label, src_dir, vrt_name in [
                 ("RGB", t_rgb, "mosaic_rgb.vrt"),
                 ("NRG", t_nrg, "mosaic_nrg.vrt"),
             ]:
                 vrt = tmp / vrt_name
                 files = sorted(str(f) for f in src_dir.glob("*.tif"))
+                logger.info(f"  → VRT Mosaic {label} ({len(files)} Streifen) ...")
                 r = _sp.run(
                     ["gdalbuildvrt", "-srcnodata", "0 0 0", str(vrt)] + files,
-                    capture_output=True, text=True
+                    stderr=_sp.PIPE, text=True
                 )
                 if r.returncode != 0:
-                    logger.error(f"✗ gdalbuildvrt {label} fehlgeschlagen")
-                    logger.error(r.stderr)
+                    logger.error(f"    ✗ gdalbuildvrt {label} fehlgeschlagen")
+                    if r.stderr.strip():
+                        logger.error(r.stderr.strip())
                     return False
+                logger.info(f"    ✓ {vrt.name}")
 
             logger.info("✓ VRT-Mosaike erstellt")
 
@@ -333,17 +356,14 @@ def process_dmc4_workflow(
                 ("RGB", "mosaic_rgb.vrt", cog_rgb),
                 ("NRG", "mosaic_nrg.vrt", cog_nrg),
             ]:
-                logger.info(f"  Erstelle COG {label}: {cog.name}")
-                r = _sp.run([
-                    "gdal_translate", "-of", "COG",
-                    "-co", "COMPRESS=JPEG", "-co", "QUALITY=75",
-                    "-co", "BIGTIFF=YES",
-                    "-a_nodata", "0",
-                    str(tmp / vrt_name), str(cog)
-                ], capture_output=True, text=True)
-                if r.returncode != 0:
-                    logger.error(f"✗ COG-Konvertierung {label} fehlgeschlagen")
-                    logger.error(r.stderr)
+                if not _run_gdal(
+                    f"COG {label}: {cog.name}",
+                    ["gdal_translate", "-of", "COG",
+                     "-co", "COMPRESS=JPEG", "-co", "QUALITY=75",
+                     "-co", "BIGTIFF=YES",
+                     "-a_nodata", "0",
+                     str(tmp / vrt_name), str(cog)]
+                ):
                     return False
 
         logger.info("✓ COG-Dateien erstellt")

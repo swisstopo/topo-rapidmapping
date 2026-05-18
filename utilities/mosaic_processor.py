@@ -141,33 +141,31 @@ def create_thumbnail_from_cog(
             # Portrait: Set height to max_size, width auto
             outsize_params = ['0', str(max_size)]
 
-        logger.info(f"  Erstelle Thumbnail: {output_file.name} (Target: {outsize_params})")
+        logger.info(f"  → Thumbnail: {output_file.name} ({outsize_params[0] or 'auto'}x{outsize_params[1] or 'auto'} px)")
 
-        # 3. Run gdal_translate with the calculated aspect ratio
-        with open(os.devnull, 'w') as devnull:
-            result = subprocess.run(
-                [
-                    'gdal_translate',
-                    '-of', 'JPEG',
-                    '-outsize', outsize_params[0], outsize_params[1],
-                    str(input_file),
-                    str(output_file)
-                ],
-                stdout=devnull,
-                stderr=devnull,
-                timeout=60,
-                env={**os.environ, 'GDAL_PAM_ENABLED': 'NO'}
-            )
+        # 3. Run gdal_translate with progress output
+        result = subprocess.run(
+            [
+                'gdal_translate',
+                '-of', 'JPEG',
+                '-outsize', outsize_params[0], outsize_params[1],
+                '-progress',
+                str(input_file),
+                str(output_file)
+            ],
+            stderr=subprocess.PIPE,
+            timeout=60,
+            env={**os.environ, 'GDAL_PAM_ENABLED': 'NO'}
+        )
 
         if result.returncode == 0 and output_file.exists():
             logger.info(f"  ✓ Thumbnail erstellt: {output_file}")
             return True
-        
+
+        if result.stderr:
+            logger.error(f"  ✗ GDAL Process Error: {result.stderr.decode(errors='replace').strip()}")
         return False
 
-    except subprocess.CalledProcessError as e:
-        logger.error(f"  ✗ GDAL Process Error: {e.stderr}")
-        return False
     except Exception as e:
         logger.error(f"  ✗ Thumbnail-Fehler: {e}")
         return False

@@ -12,10 +12,11 @@ VPN-SUPPORT: Erkennt automatisch VPN-Verbindungen und passt SSL-Handling an.
 
 import json
 import logging
+import urllib.request
 import requests
 import urllib3
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -163,6 +164,119 @@ def detect_vpn_connection(proxies: Optional[Dict] = None, test_urls: List[str] =
     return False
 
 
+def _get_system_proxy_urls() -> List[str]:
+    """
+    Read proxy URLs configured in the OS (Windows registry, env vars, macOS).
+    Returns a deduplicated list ordered https-first.
+    """
+    raw = urllib.request.getproxies()
+    seen: set = set()
+    result: List[str] = []
+    for scheme in ('https', 'http'):
+        url = raw.get(scheme)
+        if url and url not in seen:
+            seen.add(url)
+            result.append(url)
+    return result
+
+
+def _make_kerberos_session(
+    proxies_dict: Optional[Dict],
+    verify_ssl: bool,
+) -> Tuple[Optional[requests.Session], Optional[str]]:
+    """
+    Try to build a requests Session with Kerberos/SSPI proxy authentication.
+
+    Tries in order:
+      1. requests-negotiate-sspi  — Windows SSPI; works on domain-joined machines
+                                    with no extra configuration.
+      2. kerberos-proxy-auth      — cross-platform alternative.
+
+    Returns (session, method_name) or (None, None) if no library is installed.
+    Install hint is logged once so the user knows how to fix it.
+    """
+    # Option 1: Windows SSPI (preferred)
+    try:
+        from requests_negotiate_sspi import HttpNegotiateAuth
+        session = requests.Session()
+        if proxies_dict:
+            session.proxies.update(proxies_dict)
+        session.verify = verify_ssl
+        session.auth = HttpNegotiateAuth()
+        return session, "negotiate-sspi"
+    except ImportError:
+        pass
+
+    # Option 2: cross-platform kerberos
+    try:
+        import kerberos_proxy_auth  # noqa: F401
+        kerberos_proxy_auth.install()   # patches requests globally
+        session = requests.Session()
+        if proxies_dict:
+            session.proxies.update(proxies_dict)
+        session.verify = verify_ssl
+        return session, "kerberos-proxy-auth"
+    except ImportError:
+        pass
+
+    logger.warning(
+        "  ⚠ Kerberos-Bibliothek nicht installiert.\n"
+        "    Für Windows (Domäne):  pip install requests-negotiate-sspi\n"
+        "    Plattformübergreifend: pip install kerberos-proxy-auth"
+    )
+    return None, None
+
+
+def _probe_proxy(proxy_url: str, test_url: str, timeout: int) -> dict:
+    """
+    Test a proxy URL without authentication.
+
+    Returns dict with:
+      'status': 'ok'             — connection works
+               'needs_kerberos'  — proxy returned 407 (auth required)
+               'fail'            — unreachable or other error
+      'verify_ssl': bool  (only present when status == 'ok')
+    """
+    proxies = {"http": proxy_url, "https": proxy_url}
+    for verify in (True, False):
+        try:
+            r = requests.get(test_url, proxies=proxies, verify=verify, timeout=timeout)
+            if r.status_code == 200:
+                return {'status': 'ok', 'verify_ssl': verify}
+        except requests.exceptions.ProxyError as e:
+            if '407' in str(e):
+                return {'status': 'needs_kerberos'}
+        except Exception:
+            pass
+    return {'status': 'fail'}
+
+
+def _probe_proxy_kerberos(proxy_url: str, test_url: str, timeout: int) -> dict:
+    """
+    Test a proxy URL with Kerberos/SSPI authentication.
+
+    Returns dict with:
+      'status': 'ok'     — authentication succeeded
+               'no_lib'  — no Kerberos library installed
+               'fail'    — library present but authentication failed
+      'verify_ssl': bool, 'session': Session, 'method': str
+      (only present when status == 'ok')
+    """
+    proxies = {"http": proxy_url, "https": proxy_url}
+    for verify in (True, False):
+        session, method = _make_kerberos_session(proxies, verify)
+        if session is None:
+            return {'status': 'no_lib'}
+        try:
+            r = session.get(test_url, timeout=timeout)
+            if r.status_code == 200:
+                return {'status': 'ok', 'verify_ssl': verify,
+                        'session': session, 'method': method}
+        except Exception:
+            pass
+    return {'status': 'fail'}
+
+
 def detect_proxy_requirement() -> Dict:
     """
     Erkennt automatisch ob ein Proxy benötigt wird.
@@ -185,110 +299,154 @@ def detect_proxy_requirement() -> Dict:
         ConnectionError: Wenn keine Verbindung möglich ist
     """
     logger.info("Internet-Konnektivität wird getestet...")
-    
-    # Lade Proxy-Konfiguration
+
     config = load_proxy_config()
     test_url = config.get('test_url', DEFAULT_PROXY_CONFIG['test_url'])
-    timeout = config.get('timeout', DEFAULT_PROXY_CONFIG['timeout'])
-    disable_ssl_warnings = config.get('disable_ssl_warnings', True)
-    
-    if disable_ssl_warnings:
+    timeout  = config.get('timeout',  DEFAULT_PROXY_CONFIG['timeout'])
+
+    if config.get('disable_ssl_warnings', True):
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-    
-    # Test 1: Direkte Verbindung
-    logger.info(f"  [1/N] Teste direkte Verbindung zu {test_url}...")
-    if test_connection(test_url, proxies=None, verify_ssl=True, timeout=timeout):
-        logger.info("  ✓ Direkte Internet-Verbindung verfügbar (kein Proxy benötigt)")
-        session = requests.Session()
-        session.verify = True
+
+    # ── Helper: build a plain result dict ────────────────────────────────────
+    def _ok(name: Optional[str], proxies_dict, verify: bool,
+            session: requests.Session, is_vpn: bool = False) -> dict:
         return {
-            'enabled': False,
-            'proxies': None,
-            'session': session,
-            'verify_ssl': True,
-            'active_proxy': None,
-            'initialized': True,
-            'is_vpn': False
+            'enabled':      proxies_dict is not None,
+            'proxies':      proxies_dict,
+            'session':      session,
+            'verify_ssl':   verify,
+            'active_proxy': name,
+            'initialized':  True,
+            'is_vpn':       is_vpn,
         }
+
+    # ── Step 1: Direct connection ─────────────────────────────────────────────
+    logger.info(f"  [1] Direkte Verbindung → {test_url} ...")
+    if test_connection(test_url, proxies=None, verify_ssl=True, timeout=timeout):
+        logger.info("  ✓ Direkte Verbindung OK (kein Proxy)")
+        s = requests.Session()
+        s.verify = True
+        return _ok(None, None, True, s)
+    logger.info("  ✗ Direkte Verbindung fehlgeschlagen")
+
+    # ── Step 2: System proxy (OS / Windows registry / env vars) ──────────────
+    system_proxies = _get_system_proxy_urls()
+    if system_proxies:
+        logger.info(f"  [2] System-Proxy gefunden: {system_proxies}")
+        for proxy_url in system_proxies:
+            probe = _probe_proxy(proxy_url, test_url, timeout)
+            if probe['status'] == 'ok':
+                verify = probe['verify_ssl']
+                is_vpn = not verify  # no SSL → likely VPN with SSL-inspection
+                s = requests.Session()
+                s.proxies.update({"http": proxy_url, "https": proxy_url})
+                s.verify = verify
+                logger.info(
+                    f"  ✓ System-Proxy OK: {proxy_url}"
+                    + (" (VPN/SSL-Inspection erkannt)" if is_vpn else "")
+                )
+                return _ok(f"system:{proxy_url}", {"http": proxy_url, "https": proxy_url},
+                           verify, s, is_vpn)
+
+            if probe['status'] == 'needs_kerberos':
+                logger.info(
+                    f"  ℹ System-Proxy {proxy_url} verlangt Kerberos-Auth (407) — versuche SSPI ..."
+                )
+                kprobe = _probe_proxy_kerberos(proxy_url, test_url, timeout)
+                if kprobe['status'] == 'ok':
+                    logger.info(
+                        f"  ✓ System-Proxy OK (Kerberos/{kprobe['method']}): {proxy_url}"
+                    )
+                    return _ok(
+                        f"system:{proxy_url} (kerberos/{kprobe['method']})",
+                        {"http": proxy_url, "https": proxy_url},
+                        kprobe['verify_ssl'],
+                        kprobe['session'],
+                    )
+                if kprobe['status'] == 'no_lib':
+                    logger.warning(
+                        "  ⚠ Kerberos-Bibliothek fehlt — System-Proxy übersprungen."
+                    )
+                else:
+                    logger.info(f"  ✗ Kerberos-Auth für System-Proxy {proxy_url} fehlgeschlagen")
     else:
-        logger.info("  ✗ Direkte Verbindung fehlgeschlagen")
-    
-    # Test 2: Alle konfigurierten Proxies
+        logger.info("  [2] Keine System-Proxies in OS-Einstellungen gefunden")
+
+    # ── Step 3: Configured proxies (secrets/proxy_config.json) ───────────────
     enabled_proxies = get_enabled_proxies(config)
-    
     if not enabled_proxies:
-        logger.error("  ✗ Keine Proxies konfiguriert oder aktiviert")
         raise ConnectionError(
             "Keine Internet-Verbindung möglich.\n"
             f"Direkte Verbindung zu {test_url} fehlgeschlagen.\n"
+            "Keine System-Proxies erkannt.\n"
             f"Keine Proxies in {PROXY_CONFIG_PATH} aktiviert.\n"
             "Bitte Netzwerk-Einstellungen oder Proxy-Config prüfen."
         )
-    
-    for idx, proxy_info in enumerate(enabled_proxies, 2):
+
+    for idx, proxy_info in enumerate(enabled_proxies, 1):
         proxy_name = proxy_info.get('name', 'Unbekannt')
-        proxy_url = proxy_info.get('url')
-        
+        proxy_url  = proxy_info.get('url')
         if not proxy_url:
             logger.warning(f"  ⚠ Proxy '{proxy_name}': Keine URL konfiguriert")
             continue
-        
-        logger.info(f"  [{idx}/{len(enabled_proxies)+1}] Teste Proxy '{proxy_name}': {proxy_url}")
-        
-        proxies = {
-            "http": proxy_url,
-            "https": proxy_url
-        }
-        
-        # Test mit SSL-Verifikation (für normale Corporate Networks ohne VPN)
-        works_with_ssl = test_connection(test_url, proxies=proxies, verify_ssl=True, timeout=timeout)
-        
-        # Test ohne SSL-Verifikation (für VPN mit SSL-Inspection)
-        works_without_ssl = test_connection(test_url, proxies=proxies, verify_ssl=False, timeout=timeout)
-        
-        # Wenn IRGENDEINE Verbindung funktioniert, nutzen wir diesen Proxy
-        if works_with_ssl or works_without_ssl:
-            # Erkenne ob VPN aktiv ist (auch wenn erste URL SSL-ok war)
-            # Teste zusätzlich die STAC-Server-URL
-            is_vpn = detect_vpn_connection(proxies, test_urls=[
-                test_url,
-                'https://sys-data.int.bgdi.ch/api/stac/v0.9/'
-            ])
-            
-            # Wenn VPN erkannt ODER SSL-Verifikation fehlschlägt -> SSL deaktivieren
-            use_ssl = works_with_ssl and not is_vpn
-            
-            if use_ssl:
-                logger.info(f"  Proxy '{proxy_name}': OK (SSL aktiv)")
+
+        logger.info(f"  [3.{idx}] Konfigurierter Proxy '{proxy_name}': {proxy_url}")
+        probe = _probe_proxy(proxy_url, test_url, timeout)
+
+        if probe['status'] == 'ok':
+            verify = probe['verify_ssl']
+            is_vpn = detect_vpn_connection(
+                {"http": proxy_url, "https": proxy_url},
+                test_urls=[test_url, 'https://sys-data.int.bgdi.ch/api/stac/v0.9/']
+            )
+            use_ssl = verify and not is_vpn
+            s = requests.Session()
+            s.proxies.update({"http": proxy_url, "https": proxy_url})
+            s.verify = use_ssl
+            logger.info(
+                f"  ✓ Proxy '{proxy_name}' OK"
+                + (" (VPN erkannt, SSL deaktiviert)" if is_vpn else
+                   " (SSL aktiv)" if use_ssl else " (SSL deaktiviert)")
+            )
+            return _ok(proxy_name, {"http": proxy_url, "https": proxy_url},
+                       use_ssl, s, is_vpn)
+
+        if probe['status'] == 'needs_kerberos':
+            logger.info(
+                f"  ℹ Proxy '{proxy_name}' verlangt Kerberos-Auth (407) — versuche SSPI ..."
+            )
+            kprobe = _probe_proxy_kerberos(proxy_url, test_url, timeout)
+            if kprobe['status'] == 'ok':
+                logger.info(
+                    f"  ✓ Proxy '{proxy_name}' OK (Kerberos/{kprobe['method']})"
+                )
+                return _ok(
+                    f"{proxy_name} (kerberos/{kprobe['method']})",
+                    {"http": proxy_url, "https": proxy_url},
+                    kprobe['verify_ssl'],
+                    kprobe['session'],
+                )
+            if kprobe['status'] == 'no_lib':
+                logger.warning(
+                    f"  ⚠ Proxy '{proxy_name}' benötigt Kerberos, aber Bibliothek fehlt.\n"
+                    "    pip install requests-negotiate-sspi   (Windows/AD empfohlen)\n"
+                    "    pip install kerberos-proxy-auth        (plattformübergreifend)"
+                )
             else:
-                logger.info(f"  Proxy '{proxy_name}': OK (SSL deaktiviert)")
-                if is_vpn:
-                    logger.info("  VPN erkannt")
-            
-            session = requests.Session()
-            session.proxies.update(proxies)
-            session.verify = use_ssl
-            
-            return {
-                'enabled': True,
-                'proxies': proxies,
-                'session': session,
-                'verify_ssl': use_ssl,
-                'active_proxy': proxy_name,
-                'initialized': True,
-                'is_vpn': is_vpn
-            }
+                logger.info(
+                    f"  ✗ Kerberos-Auth für Proxy '{proxy_name}' fehlgeschlagen"
+                )
         else:
-            logger.info(f"  ✗ Proxy '{proxy_name}' fehlgeschlagen")
-    
-    # Alle Tests fehlgeschlagen
+            logger.info(f"  ✗ Proxy '{proxy_name}' nicht erreichbar")
+
     logger.error("  ✗ Keine Internet-Verbindung möglich")
     raise ConnectionError(
         "Keine Internet-Verbindung möglich.\n"
-        f"Versucht: Direkte Verbindung + {len(enabled_proxies)} Proxy(s)\n"
+        f"Versucht: Direkt + System-Proxy + {len(enabled_proxies)} konfigurierte(r) Proxy(s)\n"
         f"Test-URL: {test_url}\n"
         f"Proxy-Config: {PROXY_CONFIG_PATH}\n"
-        "Bitte Netzwerk-Einstellungen prüfen."
+        "Bitte Netzwerk-Einstellungen prüfen.\n"
+        "Bei 407-Fehler: pip install requests-negotiate-sspi"
     )
 
 

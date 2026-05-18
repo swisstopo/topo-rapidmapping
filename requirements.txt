@@ -4,6 +4,19 @@ rasterio
 pyproj
 urllib3
 
+# Kerberos proxy authentication (optional — only needed on networks with
+# corporate proxies that require Windows AD / Kerberos (407 Negotiate)).
+# Install the one that matches your platform:
+#
+#   Windows (domain-joined, uses built-in SSPI — recommended):
+#     pip install requests-negotiate-sspi
+#
+#   Cross-platform (requires a Kerberos ticket cache):
+#     pip install kerberos-proxy-auth
+#
+# requests-negotiate-sspi
+# kerberos-proxy-auth
+
 # STAC Client für Abfragen; funktioniert nicht, da QGIS sqlite3 bindings nciht ok sind
 
 # Zusätzliche Tools

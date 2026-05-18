@@ -298,8 +298,9 @@ def process_dmc4_workflow(
                     cmd = ["gdal_translate", "-a_srs", "EPSG:2056"]
                     for b in bands:
                         cmd += ["-b", b]
-                    # Treat pixels where all 4 source bands are 0 as nodata
-                    cmd += ["-srcnodata", "0 0 0 0", "-dstnodata", "0 0 0"]
+                    # Tag nodata=0 on all output bands; gdalbuildvrt uses this
+                    # to skip all-zero pixels when compositing the mosaic
+                    cmd += ["-a_nodata", "0"]
                     cmd += [str(tif), str(out)]
                     r = _sp.run(cmd, capture_output=True, text=True)
                     if r.returncode != 0:

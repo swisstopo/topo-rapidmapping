@@ -286,7 +286,8 @@ def process_dmc4_workflow(
             t_rgb.mkdir()
             t_nrg.mkdir()
 
-            # Step 1: extract bands + assign CRS for each stripe
+            # Step 1: extract bands + assign CRS + set nodata for each stripe
+            # Nodata definition: all 4 source bands == 0 → transparent in mosaic
             for tif in input_files:
                 stem = tif.stem
                 for label, bands, out_dir in [
@@ -297,6 +298,8 @@ def process_dmc4_workflow(
                     cmd = ["gdal_translate", "-a_srs", "EPSG:2056"]
                     for b in bands:
                         cmd += ["-b", b]
+                    # Treat pixels where all 4 source bands are 0 as nodata
+                    cmd += ["-srcnodata", "0 0 0 0", "-dstnodata", "0 0 0"]
                     cmd += [str(tif), str(out)]
                     r = _sp.run(cmd, capture_output=True, text=True)
                     if r.returncode != 0:
@@ -304,17 +307,19 @@ def process_dmc4_workflow(
                         logger.error(r.stderr)
                         return False
 
-            logger.info("✓ Bänder extrahiert und CRS EPSG:2056 zugewiesen")
+            logger.info("✓ Bänder extrahiert und CRS EPSG:2056 zugewiesen (nodata=0)")
 
-            # Step 2: build VRT mosaics
+            # Step 2: build VRT mosaics — honour nodata so stripe gaps are transparent
             for label, src_dir, vrt_name in [
                 ("RGB", t_rgb, "mosaic_rgb.vrt"),
                 ("NRG", t_nrg, "mosaic_nrg.vrt"),
             ]:
                 vrt = tmp / vrt_name
                 files = sorted(str(f) for f in src_dir.glob("*.tif"))
-                r = _sp.run(["gdalbuildvrt", str(vrt)] + files,
-                            capture_output=True, text=True)
+                r = _sp.run(
+                    ["gdalbuildvrt", "-srcnodata", "0 0 0", str(vrt)] + files,
+                    capture_output=True, text=True
+                )
                 if r.returncode != 0:
                     logger.error(f"✗ gdalbuildvrt {label} fehlgeschlagen")
                     logger.error(r.stderr)
@@ -322,7 +327,7 @@ def process_dmc4_workflow(
 
             logger.info("✓ VRT-Mosaike erstellt")
 
-            # Step 3: convert VRTs to COG
+            # Step 3: convert VRTs to COG (nodata preserved)
             for label, vrt_name, cog in [
                 ("RGB", "mosaic_rgb.vrt", cog_rgb),
                 ("NRG", "mosaic_nrg.vrt", cog_nrg),
@@ -332,6 +337,7 @@ def process_dmc4_workflow(
                     "gdal_translate", "-of", "COG",
                     "-co", "COMPRESS=JPEG", "-co", "QUALITY=75",
                     "-co", "BIGTIFF=YES",
+                    "-a_nodata", "0",
                     str(tmp / vrt_name), str(cog)
                 ], capture_output=True, text=True)
                 if r.returncode != 0:
@@ -711,30 +717,48 @@ def main():
         print("VERARBEITUNG GESTARTET")
         print("=" * 70 + "\n")
 
-        if product_type in [ProductType.QDOP_RGB, ProductType.QDOP_NRG]:
-            success = process_mosaic_workflow(
-                input_dir, product_type, timestamp_or_date,
-                args.upload, environment, hostname,
-                debug=args.debug
-            )
-        elif product_type == ProductType.QDOP_DMC4:
-            success = process_dmc4_workflow(
-                input_dir, timestamp_or_date,
-                args.upload, environment, hostname,
-                debug=args.debug
-            )
-        else:
-            success = process_photos_workflow(
-                input_dir, product_type, timestamp_or_date,
-                args.upload, environment, hostname,
-                debug=args.debug
-            )
+        # ── Log-Datei einrichten ──────────────────────────────────────────────
+        _log_ts       = datetime.now().strftime('%Y%m%d_%H%M%S')
+        _log_filename = f"Log_{product_type.value}_{_log_ts}.txt"
+        _log_handler  = logging.FileHandler(_log_filename, encoding='utf-8')
+        _log_handler.setLevel(logging.INFO)
+        _log_handler.setFormatter(
+            logging.Formatter('%(asctime)s %(levelname)-8s %(message)s',
+                              datefmt='%Y-%m-%d %H:%M:%S')
+        )
+        logging.getLogger().addHandler(_log_handler)
+        logger.info(f"Log-Datei: {_log_filename}")
+        # ─────────────────────────────────────────────────────────────────────
+
+        try:
+            if product_type in [ProductType.QDOP_RGB, ProductType.QDOP_NRG]:
+                success = process_mosaic_workflow(
+                    input_dir, product_type, timestamp_or_date,
+                    args.upload, environment, hostname,
+                    debug=args.debug
+                )
+            elif product_type == ProductType.QDOP_DMC4:
+                success = process_dmc4_workflow(
+                    input_dir, timestamp_or_date,
+                    args.upload, environment, hostname,
+                    debug=args.debug
+                )
+            else:
+                success = process_photos_workflow(
+                    input_dir, product_type, timestamp_or_date,
+                    args.upload, environment, hostname,
+                    debug=args.debug
+                )
+        finally:
+            logging.getLogger().removeHandler(_log_handler)
+            _log_handler.close()
 
         print("\n" + "=" * 70)
         if success:
             logger.info("✓ VERARBEITUNG ERFOLGREICH")
         else:
             logger.error("✗ VERARBEITUNG MIT FEHLERN")
+        print(f"  Log:  {Path(_log_filename).resolve()}")
         print("=" * 70 + "\n")
 
         return 0 if success else 1

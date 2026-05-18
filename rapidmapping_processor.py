@@ -134,19 +134,109 @@ def _ensure_ms_suffix(timestamp: str) -> str:
     return timestamp
 
 
-def _run_gdal(label: str, cmd: list) -> bool:
+_GDAL_PROGRESS_SUPPORTED: dict = {}  # cache per executable, e.g. {'gdal_translate': True}
+
+
+def _supports_progress(exe: str) -> bool:
+    """Probe once whether this GDAL build accepts -progress for the given tool."""
+    import subprocess as _sp
+    if exe not in _GDAL_PROGRESS_SUPPORTED:
+        r = _sp.run([exe, "--help"], capture_output=True, text=True)
+        _GDAL_PROGRESS_SUPPORTED[exe] = "-progress" in r.stdout or "-progress" in r.stderr
+    return _GDAL_PROGRESS_SUPPORTED[exe]
+
+
+def _poll_progress(output_path: "Path", ref_size_bytes: int, stop_event, interval: float = 0.5):
     """
-    Run a GDAL subprocess with live progress output.
+    Background thread: polls output_path size and prints a live progress bar.
+    Runs until stop_event is set.
 
-    Prints a labelled header line, then lets GDAL's own -progress output go
-    straight to the terminal (stdout inherited).  Only stderr is captured so
-    we can log it on failure.
+    Uses the input file size as a rough 100% reference (output will differ
+    due to compression, but it gives a useful visual indicator).
+    """
+    import time
+    import os
 
-    Returns True on success, False on non-zero exit.
+    bar_width = 30
+    while not stop_event.is_set():
+        try:
+            written = os.path.getsize(output_path) if output_path.exists() else 0
+        except OSError:
+            written = 0
+
+        if ref_size_bytes > 0:
+            pct = min(written / ref_size_bytes * 100, 99)  # cap at 99 until done
+        else:
+            pct = 0
+
+        filled  = int(bar_width * pct / 100)
+        bar     = "█" * filled + "░" * (bar_width - filled)
+        written_mb = written / 1_048_576
+        print(f"\r    [{bar}] {pct:5.1f}%  {written_mb:.1f} MB written", end="", flush=True)
+        time.sleep(interval)
+
+    # Final 100% line
+    bar = "█" * bar_width
+    try:
+        done_mb = os.path.getsize(output_path) / 1_048_576 if output_path.exists() else 0
+    except OSError:
+        done_mb = 0
+    print(f"\r    [{bar}] 100.0%  {done_mb:.1f} MB written", flush=True)
+
+
+def _run_gdal(label: str, cmd: list, output_path: "Path | None" = None) -> bool:
+    """
+    Run a GDAL subprocess with live progress feedback.
+
+    If the GDAL build supports -progress: appended to the command and GDAL
+    prints  0...10...20...30...40...50...60...70...80...90...100 - done.
+    natively (stdout inherited).
+
+    Fallback (older GDAL / QGIS-bundled builds): a background thread polls
+    the output file size and renders a growing progress bar.
+
+    In both cases stderr is captured for error logging.
     """
     import subprocess as _sp
+    import threading
+    import os
+
     logger.info(f"  → {label}")
-    result = _sp.run(cmd + ["-progress"], stderr=_sp.PIPE, text=True)
+
+    if _supports_progress(cmd[0]):
+        full_cmd = cmd + ["-progress"]
+        result = _sp.run(full_cmd, stderr=_sp.PIPE, text=True)
+    else:
+        # Determine reference size from the input file (last positional arg
+        # before the output, i.e. second-to-last element of cmd).
+        ref_path = Path(cmd[-2]) if len(cmd) >= 2 else None
+        ref_size = 0
+        if ref_path and ref_path.exists():
+            try:
+                ref_size = os.path.getsize(ref_path)
+            except OSError:
+                pass
+
+        watch_path = output_path or (Path(cmd[-1]) if cmd else None)
+        stop_evt   = threading.Event()
+
+        if watch_path and ref_size > 0:
+            t = threading.Thread(
+                target=_poll_progress,
+                args=(watch_path, ref_size, stop_evt),
+                daemon=True
+            )
+            t.start()
+        else:
+            t = None
+            print("    (Fortschritt nicht verfügbar für diesen GDAL-Build)")
+
+        result = _sp.run(cmd, stderr=_sp.PIPE, text=True)
+
+        stop_evt.set()
+        if t is not None:
+            t.join()
+
     if result.returncode != 0:
         logger.error(f"    ✗ fehlgeschlagen (exit {result.returncode})")
         if result.stderr.strip():
@@ -322,7 +412,8 @@ def process_dmc4_workflow(
                         cmd += ["-b", b]
                     cmd += ["-a_nodata", "0", str(tif), str(out)]
                     if not _run_gdal(
-                        f"[{idx}/{total}] Streifen {label}: {tif.name}", cmd
+                        f"[{idx}/{total}] Streifen {label}: {tif.name}", cmd,
+                        output_path=out
                     ):
                         return False
 
@@ -362,7 +453,8 @@ def process_dmc4_workflow(
                      "-co", "COMPRESS=JPEG", "-co", "QUALITY=75",
                      "-co", "BIGTIFF=YES",
                      "-a_nodata", "0",
-                     str(tmp / vrt_name), str(cog)]
+                     str(tmp / vrt_name), str(cog)],
+                    output_path=cog
                 ):
                     return False
 

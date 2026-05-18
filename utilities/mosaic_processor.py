@@ -143,13 +143,18 @@ def create_thumbnail_from_cog(
 
         logger.info(f"  → Thumbnail: {output_file.name} ({outsize_params[0] or 'auto'}x{outsize_params[1] or 'auto'} px)")
 
-        # 3. Run gdal_translate with progress output
+        # 3. Run gdal_translate with progress output if supported by this build
+        _help = subprocess.run(
+            ['gdal_translate', '--help'], capture_output=True, text=True
+        )
+        _progress_flag = ['-progress'] if '-progress' in _help.stdout + _help.stderr else []
+
         result = subprocess.run(
             [
                 'gdal_translate',
                 '-of', 'JPEG',
                 '-outsize', outsize_params[0], outsize_params[1],
-                '-progress',
+            ] + _progress_flag + [
                 str(input_file),
                 str(output_file)
             ],

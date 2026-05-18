@@ -745,6 +745,11 @@ def main():
             logger.info("=" * 70)
             username, password, hostname = load_stac_credentials(environment=environment)
             logger.info(f"✓ Credentials geladen: {hostname}")
+
+            logger.info("=" * 70)
+            logger.info("PROXY / NETZWERK")
+            logger.info("=" * 70)
+            initialize_proxy()
         else:
             hostname = None
 

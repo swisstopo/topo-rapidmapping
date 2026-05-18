@@ -318,8 +318,11 @@ class StacMultipartUploader:
         '''Returns the hashes for the file parts to upload. Called by the constructor.'''
         sha256 = hashlib.sha256()
         md5_parts = []
-        if self.verbose:
-            logger.debug(f"Reading {self.asset_file_name} and calculating parts and md5sum:")
+        file_size = os.path.getsize(self.asset_file_name)
+        total_parts = max(1, (file_size + self.part_size - 1) // self.part_size)
+        file_size_mb = file_size / 1_048_576
+
+        print(f"  Prüfsummen berechnen: {file_size_mb:.0f} MB  ({total_parts} Teile à {self.part_size // 1_048_576} MB) ...")
         with open(self.asset_file_name, 'rb') as file_descriptor:
             while True:
                 data = file_descriptor.read(self.part_size)
@@ -327,8 +330,13 @@ class StacMultipartUploader:
                     break
                 sha256.update(data)
                 md5_parts.append({'part_number': len(md5_parts) + 1, 'md5': b64_md5(data)})
-                if self.verbose:
-                    logger.debug(f"  Hashing part {len(md5_parts)}...")
+                pct     = len(md5_parts) / total_parts * 100
+                bar     = "█" * int(pct / 4) + "░" * (25 - int(pct / 4))
+                read_mb = len(md5_parts) * self.part_size / 1_048_576
+                print(f"\r    [{bar}] {pct:5.1f}%  Teil {len(md5_parts)}/{total_parts}  ({read_mb:.0f} MB gelesen)",
+                      end="", flush=True)
+        print(f"\r    [{'█' * 25}] 100.0%  {total_parts}/{total_parts} Teile  ({file_size_mb:.0f} MB)  ✓", flush=True)
+
         sha2_256 = multihash.encode(sha256.digest(), 'sha2-256')
         checksum_multihash = multihash.to_hex_string(sha2_256)
         return (checksum_multihash, md5_parts)
@@ -397,15 +405,28 @@ class StacMultipartUploader:
 
     def _upload_parts(self, upload_urls):
         '''Upload the parts using the presigned urls'''
-        self._log("Uploading the parts...", verbose=self.verbose)
         parts = []
         number_of_parts = len(upload_urls)
+        file_size_mb    = os.path.getsize(self.asset_file_name) / 1_048_576
+        part_size_mb    = self.part_size / 1_048_576
+        _upload_start   = datetime.now()
+
+        print(f"  Upload: {file_size_mb:.0f} MB in {number_of_parts} Teile  → {self.asset_file_name}")
 
         with open(self.asset_file_name, 'rb') as file_descriptor:
             for url in upload_urls:
-                self._log(
-                    f"Uploading part {url['part']} of {number_of_parts}", verbose=self.verbose
-                )
+                part_num   = url['part']
+                uploaded_mb = (part_num - 1) * part_size_mb
+                pct        = uploaded_mb / file_size_mb * 100
+                elapsed    = (datetime.now() - _upload_start).total_seconds()
+                speed      = uploaded_mb / elapsed if elapsed > 1 else 0
+                eta_s      = (file_size_mb - uploaded_mb) / speed if speed > 0.5 else 0
+                eta_str    = f"  ETA ~{int(eta_s // 60)}m{int(eta_s % 60):02d}s" if eta_s > 5 else ""
+                bar        = "█" * int(pct / 4) + "░" * (25 - int(pct / 4))
+                print(f"\r    [{bar}] {pct:5.1f}%  Teil {part_num - 1}/{number_of_parts}"
+                      f"  {uploaded_mb:.0f}/{file_size_mb:.0f} MB"
+                      f"  {speed:.1f} MB/s{eta_str}",
+                      end="", flush=True)
                 data = file_descriptor.read(self.part_size)
                 retry = 5  # Increased from 3 to 5 for VPN stability
                 last_error = None
@@ -467,10 +488,15 @@ class StacMultipartUploader:
                             logger.error(f"  ✗ Part {url['part']} failed after 5 attempts: {last_error}")
                             raise
 
+        elapsed_total = (datetime.now() - _upload_start).total_seconds()
+        avg_speed     = file_size_mb / elapsed_total if elapsed_total > 0 else 0
+        print(f"\r    [{'█' * 25}] 100.0%  {number_of_parts}/{number_of_parts} Teile"
+              f"  {file_size_mb:.0f} MB  ∅ {avg_speed:.1f} MB/s  ✓", flush=True)
         return parts
 
     def _complete_upload(self, upload_id, parts):
         '''Complete the upload'''
+        print("  Upload abschliessen (Server-seitige Verarbeitung) ...")
         self._log("Checking for multipart upload completness...", verbose=self.verbose)
         payload = {'parts': parts}
         response = http.post(

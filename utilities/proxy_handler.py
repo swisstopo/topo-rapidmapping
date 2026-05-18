@@ -167,13 +167,15 @@ def detect_vpn_connection(proxies: Optional[Dict] = None, test_urls: List[str] =
 def _get_system_proxy_urls() -> List[str]:
     """
     Read proxy URLs configured in the OS (Windows registry, env vars, macOS).
+    Also checks GDAL/QGIS-specific env var keys (gdal_https, gdal_http).
     Returns a deduplicated list ordered https-first.
     """
     raw = urllib.request.getproxies()
     seen: set = set()
     result: List[str] = []
-    for scheme in ('https', 'http'):
-        url = raw.get(scheme)
+    # Check in priority order: prefer https over http, GDAL keys as fallback
+    for key in ('https', 'http', 'gdal_https', 'gdal_http'):
+        url = raw.get(key)
         if url and url not in seen:
             seen.add(url)
             result.append(url)
@@ -330,45 +332,50 @@ def detect_proxy_requirement() -> Dict:
     logger.info("  ✗ Direkte Verbindung fehlgeschlagen")
 
     # ── Step 2: System proxy (OS / Windows registry / env vars) ──────────────
+    # Strategy: always try Kerberos/SSPI first when a system proxy is found.
+    # Corporate proxies often require Negotiate auth without sending a 407 first
+    # (they just drop the connection). Kerberos auth on a non-auth proxy is harmless.
     system_proxies = _get_system_proxy_urls()
     if system_proxies:
         logger.info(f"  [2] System-Proxy gefunden: {system_proxies}")
         for proxy_url in system_proxies:
+            proxies_dict = {"http": proxy_url, "https": proxy_url}
+
+            # 2a: Try with Kerberos/SSPI upfront (works even if not required)
+            session, method = _make_kerberos_session(proxies_dict, verify_ssl=False)
+            if session is not None:
+                logger.info(f"  ℹ System-Proxy: versuche Kerberos/{method} mit {proxy_url} ...")
+                try:
+                    r = session.get(test_url, timeout=timeout)
+                    if r.status_code == 200:
+                        logger.info(f"  ✓ System-Proxy OK (Kerberos/{method}): {proxy_url}")
+                        return _ok(f"system:{proxy_url} (kerberos/{method})",
+                                   proxies_dict, False, session)
+                except Exception:
+                    pass
+                logger.info(f"  ✗ Kerberos/{method} für System-Proxy fehlgeschlagen")
+
+            # 2b: Fallback — plain probe (no auth)
             probe = _probe_proxy(proxy_url, test_url, timeout)
             if probe['status'] == 'ok':
                 verify = probe['verify_ssl']
-                is_vpn = not verify  # no SSL → likely VPN with SSL-inspection
                 s = requests.Session()
-                s.proxies.update({"http": proxy_url, "https": proxy_url})
+                s.proxies.update(proxies_dict)
                 s.verify = verify
                 logger.info(
-                    f"  ✓ System-Proxy OK: {proxy_url}"
-                    + (" (VPN/SSL-Inspection erkannt)" if is_vpn else "")
+                    f"  ✓ System-Proxy OK (ohne Auth): {proxy_url}"
+                    + (" (VPN/SSL-Inspection erkannt)" if not verify else "")
                 )
-                return _ok(f"system:{proxy_url}", {"http": proxy_url, "https": proxy_url},
-                           verify, s, is_vpn)
+                return _ok(f"system:{proxy_url}", proxies_dict, verify, s, not verify)
 
             if probe['status'] == 'needs_kerberos':
-                logger.info(
-                    f"  ℹ System-Proxy {proxy_url} verlangt Kerberos-Auth (407) — versuche SSPI ..."
+                # 407 received but Kerberos already failed above → library issue
+                logger.warning(
+                    f"  ⚠ System-Proxy {proxy_url}: 407 und Kerberos fehlgeschlagen.\n"
+                    "    pip install requests-negotiate-sspi  (Windows/AD empfohlen)"
                 )
-                kprobe = _probe_proxy_kerberos(proxy_url, test_url, timeout)
-                if kprobe['status'] == 'ok':
-                    logger.info(
-                        f"  ✓ System-Proxy OK (Kerberos/{kprobe['method']}): {proxy_url}"
-                    )
-                    return _ok(
-                        f"system:{proxy_url} (kerberos/{kprobe['method']})",
-                        {"http": proxy_url, "https": proxy_url},
-                        kprobe['verify_ssl'],
-                        kprobe['session'],
-                    )
-                if kprobe['status'] == 'no_lib':
-                    logger.warning(
-                        "  ⚠ Kerberos-Bibliothek fehlt — System-Proxy übersprungen."
-                    )
-                else:
-                    logger.info(f"  ✗ Kerberos-Auth für System-Proxy {proxy_url} fehlgeschlagen")
+            else:
+                logger.info(f"  ✗ System-Proxy {proxy_url} nicht erreichbar")
     else:
         logger.info("  [2] Keine System-Proxies in OS-Einstellungen gefunden")
 

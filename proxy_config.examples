@@ -1,25 +1,47 @@
 {
-  "_comment": "Proxy-Konfiguration für Internet-Zugang",
+  "_comment": "Proxy-Konfiguration — kopiere diese Datei zu secrets/proxy_config.json",
   "_instructions": [
-    "1. Kopiere diese Datei zu 'proxy_config.json'",
-    "2. Passe die Proxy-URLs an deine Umgebung an",
-    "3. Proxies werden in Reihenfolge getestet",
-    "4. Leer lassen für automatische Erkennung"
+    "1. Kopiere diese Datei: cp proxy_config.examples secrets/proxy_config.json",
+    "2. Trage deine Proxy-URL(s) ein (URL-Feld anpassen)",
+    "3. Nicht benötigte Proxies auf 'enabled': false setzen",
+    "",
+    "In den meisten Fällen genügt es, einfach nur die URL anzupassen.",
+    "Der Rest (Kerberos, SSL, VPN) wird automatisch erkannt.",
+    "",
+    "KERBEROS / CORPORATE PROXY (z.B. Bundesverwaltung):",
+    "  Wenn dein Proxy Windows-Anmeldedaten (Negotiate/SSPI) verlangt,",
+    "  musst du nichts Besonderes konfigurieren — das Tool erkennt das",
+    "  automatisch, solange du am Windows-Domain angemeldet bist.",
+    "  Voraussetzung: pip install requests-negotiate-sspi",
+    "",
+    "VPN / SSL-INSPECTION:",
+    "  Wenn dein VPN den HTTPS-Traffic entschlüsselt (SSL-Inspection),",
+    "  wird SSL-Verifikation automatisch deaktiviert.",
+    "  'disable_ssl_warnings': true unterdrückt die zugehörigen Warnungen.",
+    "",
+    "KEINE PROXY-CONFIG:",
+    "  Das Tool funktioniert auch ohne diese Datei — es versucht dann:",
+    "  1. Direkte Verbindung",
+    "  2. System-Proxy aus Windows-Einstellungen (falls konfiguriert)"
   ],
   "proxies": [
     {
-      "name": "NAME PROXY 1",
-      "url": "http://proxy.ch:8080",
-      "verify_ssl": false,
+      "_comment": "Primärer Proxy — URL anpassen, Rest ist optional",
+      "name": "Haupt-Proxy",
+      "url": "http://proxy.example.ch:8080",
       "enabled": true
     },
     {
-      "name": "NAME PROXY 2",
-      "url": "http://another.proxy.ch:8080",
+      "_comment": "Backup-Proxy — auf false wenn nicht benötigt",
+      "name": "Backup-Proxy",
+      "url": "http://proxy2.example.ch:8080",
       "enabled": false
     }
   ],
   "test_url": "https://data.geo.admin.ch/browser/index.html",
+  "_test_url_comment": "URL die zum Testen der Verbindung verwendet wird — normalerweise nicht ändern",
   "timeout": 5,
-  "disable_ssl_warnings": true
+  "_timeout_comment": "Verbindungs-Timeout in Sekunden (5 ist ein guter Wert)",
+  "disable_ssl_warnings": true,
+  "_ssl_comment": "Unterdrückt SSL-Warnungen bei VPN-Verbindungen — auf false wenn du die Warnungen sehen willst"
 }

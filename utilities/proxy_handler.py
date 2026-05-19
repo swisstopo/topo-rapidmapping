@@ -282,6 +282,13 @@ def _install_kerberos_tunnel_patch():
     _orig_tunnel = http.client.HTTPConnection._tunnel
 
     def _sspi_tunnel(self):
+        # urllib3.close() (called inside stdlib _tunnel on any non-200 response)
+        # clears self._tunnel_host = None and self._tunnel_headers = {}.
+        # Save them now so we can restore them after the 407 response.
+        saved_host    = self._tunnel_host
+        saved_port    = self._tunnel_port
+        saved_headers = dict(getattr(self, '_tunnel_headers', {}))
+
         # First attempt without explicit proxy auth
         try:
             return _orig_tunnel(self)
@@ -289,6 +296,11 @@ def _install_kerberos_tunnel_patch():
             if '407' not in str(e):
                 raise
             # 407 Proxy Authentication Required — retry with SSPI Negotiate
+
+        # Restore tunnel metadata cleared by urllib3.close() inside _orig_tunnel
+        self._tunnel_host    = saved_host
+        self._tunnel_port    = saved_port
+        self._tunnel_headers = dict(saved_headers)
 
         try:
             import sspi as _sspi
@@ -301,7 +313,7 @@ def _install_kerberos_tunnel_patch():
         # Generate SSPI Negotiate token; self.host is the PROXY when using ProxyManager
         try:
             clientauth = _sspi.ClientAuth('Negotiate', targetspn=f'HTTP/{self.host}')
-            err, out_buf = clientauth.authorize(None)
+            _, out_buf = clientauth.authorize(None)
             token = _b64.b64encode(out_buf[0].Buffer).decode()
         except Exception as ex:
             raise OSError(
@@ -309,7 +321,7 @@ def _install_kerberos_tunnel_patch():
                 f'  SSPI-Token-Generierung fehlgeschlagen: {ex}'
             )
 
-        # stdlib closed the socket after the 407 — re-establish the TCP connection to proxy
+        # urllib3.close() also closed the socket — re-establish TCP to proxy
         try:
             timeout = self.timeout if self.timeout is not None else _socket.getdefaulttimeout()
             src = getattr(self, 'source_address', None)
@@ -321,13 +333,12 @@ def _install_kerberos_tunnel_patch():
             )
 
         # Retry the CONNECT with the Negotiate token
-        saved_headers = dict(self._tunnel_headers)
         self._tunnel_headers['Proxy-Authorization'] = f'Negotiate {token}'
         try:
             return _orig_tunnel(self)
         finally:
-            self._tunnel_headers.clear()
-            self._tunnel_headers.update(saved_headers)
+            # Remove the auth header we injected (leave other headers intact)
+            self._tunnel_headers.pop('Proxy-Authorization', None)
 
     http.client.HTTPConnection._tunnel = _sspi_tunnel
     http.client.HTTPConnection._kerberos_patched = True

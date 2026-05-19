@@ -257,19 +257,25 @@ def _make_kerberos_session(
 
 def _install_kerberos_tunnel_patch():
     """
-    Monkey-patch http.client.HTTPConnection._tunnel to handle 407 Proxy Authentication
-    Required with Kerberos/SSPI Negotiate.
+    Monkey-patch http.client.HTTPConnection._tunnel to pre-authenticate CONNECT
+    tunnels with a Kerberos/SSPI Negotiate token.
 
-    Problem: older urllib3 (e.g., QGIS-bundled) calls the stdlib _tunnel() which raises
-    OSError immediately on a 407 Proxy-Auth-Required response without giving the
-    requests-negotiate-sspi auth handler any chance to negotiate. This happens for ALL
-    HTTPS requests through an authenticating proxy, regardless of thread count.
+    Problem: older urllib3 (PyInstaller-bundled 1.26.x) calls the stdlib _tunnel()
+    which raises OSError immediately on a 407 response, before the requests auth
+    handler has any chance to negotiate. Newer urllib3 (2.x) handles this natively,
+    but the patched pre-auth approach is harmless there too.
 
-    Fix: intercept the 407, generate a fresh SSPI Negotiate token targeted at the proxy,
-    reconnect the TCP socket (closed by stdlib after 407), and retry CONNECT with the
-    Proxy-Authorization: Negotiate <token> header.
+    Strategy: generate a fresh Negotiate token BEFORE the first CONNECT attempt.
+    This avoids any 407 response so the socket is never closed/replaced — which
+    would otherwise leave urllib3's local socket variable pointing at a dead socket
+    (WinError 10038 "not a socket" on the SSL wrap).
 
-    Thread-safe: sspi.ClientAuth is created per call (local variable).
+    Token generation tries two backends in order:
+      1. pywin32.sspi   — available if full pywin32 is installed
+      2. requests_negotiate_sspi + PreparedRequest — works with pywin32-ctypes too
+         (used in virtualenvs that only have pywin32-ctypes, incl. PyInstaller exes)
+
+    Thread-safe: auth objects are created per-call (local variables).
     Idempotent:  installs the patch only once (guarded by _kerberos_patched flag).
     """
     import http.client
@@ -280,39 +286,56 @@ def _install_kerberos_tunnel_patch():
 
     _orig_tunnel = http.client.HTTPConnection._tunnel
 
-    def _sspi_tunnel(self):
-        # Strategy: pre-authenticate the CONNECT with a fresh SSPI Negotiate token.
-        #
-        # Why NOT "try unauthenticated first, retry on 407":
-        #   urllib3.connect() saves the socket in a local variable BEFORE calling
-        #   _tunnel(). If _tunnel() closes and replaces self.sock (on 407 reconnect),
-        #   urllib3 still passes the now-closed original socket to ssl_wrap_socket
-        #   → WinError 10038 "not a socket".
-        #
-        # Pre-authenticating avoids any 407 response, so self.sock is never closed
-        # and the local variable in urllib3.connect() remains valid throughout.
+    def _negotiate_token(proxy_host: str) -> str:
+        """
+        Generate a Kerberos/SSPI Negotiate token for the given proxy host.
+        Returns the base64-encoded token string, or '' on failure.
 
-        token: str = ''
+        Tries pywin32.sspi first (fastest), then falls back to
+        requests_negotiate_sspi which works with pywin32-ctypes as well.
+        """
+        # ── Option 1: pywin32.sspi ────────────────────────────────────────────
         try:
             import sspi as _sspi
-            clientauth = _sspi.ClientAuth('Negotiate', targetspn=f'HTTP/{self.host}')
-            _, out_buf = clientauth.authorize(None)
-            token = _b64.b64encode(out_buf[0].Buffer).decode()
+            auth = _sspi.ClientAuth('Negotiate', targetspn=f'HTTP/{proxy_host}')
+            _, out_buf = auth.authorize(None)
+            return _b64.b64encode(out_buf[0].Buffer).decode()
         except ImportError:
-            pass   # sspi not available — fall through without auth (may hit 407)
+            pass  # pywin32 not installed — try next option
         except Exception:
-            pass   # SSPI token generation failed — fall through without auth
+            pass  # unexpected error — try next option
+
+        # ── Option 2: requests_negotiate_sspi (works with pywin32-ctypes) ────
+        try:
+            import requests as _req
+            from requests_negotiate_sspi import HttpNegotiateAuth
+            # Prepare a dummy request to the proxy host so HttpNegotiateAuth
+            # generates an initial Negotiate token for HTTP/<proxy_host> SPN.
+            prep = _req.Request('GET', f'http://{proxy_host}/').prepare()
+            prep = HttpNegotiateAuth()(prep)
+            header = prep.headers.get('Authorization', '')
+            if header.startswith('Negotiate '):
+                return header.split(' ', 1)[1]
+        except Exception:
+            pass
+
+        return ''  # no token available — caller falls back to unauthenticated
+
+    def _sspi_tunnel(self):
+        token = _negotiate_token(self.host)
 
         if not token:
+            # No Kerberos token available; try unauthenticated (may hit 407)
             return _orig_tunnel(self)
 
-        # Inject Negotiate token into the CONNECT headers for this call only
+        # Pre-inject the Negotiate token into the CONNECT request headers.
+        # This avoids any 407/reconnect cycle and keeps self.sock intact for
+        # the SSL wrap that urllib3 performs immediately after _tunnel() returns.
         saved_auth = self._tunnel_headers.pop('Proxy-Authorization', None)
         self._tunnel_headers['Proxy-Authorization'] = f'Negotiate {token}'
         try:
             return _orig_tunnel(self)
         finally:
-            # Restore previous state (normally no Proxy-Authorization was present)
             self._tunnel_headers.pop('Proxy-Authorization', None)
             if saved_auth is not None:
                 self._tunnel_headers['Proxy-Authorization'] = saved_auth

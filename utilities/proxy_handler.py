@@ -1,13 +1,26 @@
 """
-Proxy Detection und Konfiguration mit JSON-basierter Konfiguration.
+Automatische Proxy-Erkennung und -Konfiguration.
 
-Lädt Proxy-Einstellungen aus secrets/proxy_config.json und testet
-automatisch alle konfigurierten Proxies.
+Dieses Modul ist die zentrale Stelle für die Netzwerk-/Proxy-Verwaltung.
+Alle anderen Module rufen nur die öffentlichen Funktionen aus diesem Modul auf.
 
-WICHTIG: Diese Datei ist die EINZIGE Stelle für Proxy-Verwaltung!
-Alle anderen Module verwenden nur die Funktionen aus diesem Modul.
+Reihenfolge beim Start (detect_proxy_requirement):
+  1. Direkte Verbindung — kein Proxy nötig (z.B. im Büronetz mit VPN-Client)
+  2. System-Proxy (Windows-Registrierung / Umgebungsvariablen)
+     → sofortiger Kerberos/SSPI-Versuch (Corporate-Proxies verlangen oft Negotiate)
+     → Fallback: Verbindung ohne Auth (falls kein Kerberos benötigt)
+  3. Proxies aus secrets/proxy_config.json (manuell konfiguriert)
 
-VPN-SUPPORT: Erkennt automatisch VPN-Verbindungen und passt SSL-Handling an.
+Kerberos/SSPI (Corporate-Umgebungen):
+  Viele Corporate-Proxies verlangen Windows-Negotiate-Authentifizierung.
+  Das Modul erledigt das automatisch — der Benutzer muss nichts konfigurieren,
+  solange er am Windows-Domain angemeldet ist und
+  'requests-negotiate-sspi' installiert ist:
+      pip install requests-negotiate-sspi
+
+VPN-Erkennung:
+  Erkennt automatisch ob ein VPN mit SSL-Inspection aktiv ist
+  und deaktiviert in diesem Fall die SSL-Verifikation.
 """
 
 import json
@@ -257,26 +270,21 @@ def _make_kerberos_session(
 
 def _install_kerberos_tunnel_patch():
     """
-    Monkey-patch http.client.HTTPConnection._tunnel to pre-authenticate CONNECT
-    tunnels with a Kerberos/SSPI Negotiate token.
+    Stellt sicher dass HTTPS-Verbindungen durch einen Kerberos-Proxy funktionieren.
 
-    Problem: older urllib3 (PyInstaller-bundled 1.26.x) calls the stdlib _tunnel()
-    which raises OSError immediately on a 407 response, before the requests auth
-    handler has any chance to negotiate. Newer urllib3 (2.x) handles this natively,
-    but the patched pre-auth approach is harmless there too.
+    Hintergrund:
+      HTTPS durch einen HTTP-Proxy erfordert einen CONNECT-Tunnel.
+      Ältere urllib3-Versionen (die in PyInstaller-EXEs gebündelt werden)
+      brechen sofort mit OSError ab wenn der Proxy 407 zurückschickt — bevor
+      eine Kerberos-Authentifizierung stattfinden kann.
 
-    Strategy: generate a fresh Negotiate token BEFORE the first CONNECT attempt.
-    This avoids any 407 response so the socket is never closed/replaced — which
-    would otherwise leave urllib3's local socket variable pointing at a dead socket
-    (WinError 10038 "not a socket" on the SSL wrap).
+    Lösung:
+      Der Kerberos-Token wird VOR dem ersten CONNECT-Versuch generiert und
+      direkt in den CONNECT-Request injiziert. So antwortet der Proxy nie mit
+      407, der Socket bleibt gültig und urllib3 kann SSL normal abwickeln.
 
-    Token generation tries two backends in order:
-      1. pywin32.sspi   — available if full pywin32 is installed
-      2. requests_negotiate_sspi + PreparedRequest — works with pywin32-ctypes too
-         (used in virtualenvs that only have pywin32-ctypes, incl. PyInstaller exes)
-
-    Thread-safe: auth objects are created per-call (local variables).
-    Idempotent:  installs the patch only once (guarded by _kerberos_patched flag).
+    Thread-safe: Token-Objekte werden pro Aufruf lokal erstellt.
+    Idempotent: wird nur einmal installiert (bewacht durch _kerberos_patched).
     """
     import http.client
     import base64 as _b64
@@ -291,44 +299,38 @@ def _install_kerberos_tunnel_patch():
         Generate a Kerberos/SSPI Negotiate token for the given proxy host.
         Returns the base64-encoded token string, or '' on failure.
 
-        Tries pywin32.sspi first (fastest), then falls back to
-        requests_negotiate_sspi which works with pywin32-ctypes as well.
+        Tries two backends in order:
+          1. pywin32.sspi             — fastest; requires full pywin32 package
+          2. requests_negotiate_sspi  — works with pywin32-ctypes (used in
+                                        virtualenvs and PyInstaller exes that
+                                        don't ship the full pywin32 package)
         """
         # ── Option 1: pywin32.sspi ────────────────────────────────────────────
         try:
             import sspi as _sspi
-            logger.warning('  [SSPI] Option 1: pywin32.sspi imported OK')
             auth = _sspi.ClientAuth('Negotiate', targetspn=f'HTTP/{proxy_host}')
             _, out_buf = auth.authorize(None)
-            token = _b64.b64encode(out_buf[0].Buffer).decode()
-            logger.warning(f'  [SSPI] Option 1 OK: token length={len(token)}')
-            return token
-        except ImportError as _e:
-            logger.warning(f'  [SSPI] Option 1 ImportError: {_e}')
+            return _b64.b64encode(out_buf[0].Buffer).decode()
+        except ImportError:
+            pass  # pywin32 not available — try next option
         except Exception as _e:
-            logger.warning(f'  [SSPI] Option 1 error: {type(_e).__name__}: {_e}')
+            logger.debug(f'  SSPI pywin32 token error: {type(_e).__name__}: {_e}')
 
         # ── Option 2: requests_negotiate_sspi (works with pywin32-ctypes) ────
+        # HttpNegotiateAuth generates the initial Negotiate token when called
+        # with a PreparedRequest — even without a prior 407 challenge.
         try:
             import requests as _req
             from requests_negotiate_sspi import HttpNegotiateAuth
-            logger.warning('  [SSPI] Option 2: requests_negotiate_sspi imported OK')
-            # Prepare a dummy request to the proxy host so HttpNegotiateAuth
-            # generates an initial Negotiate token for HTTP/<proxy_host> SPN.
             prep = _req.Request('GET', f'http://{proxy_host}/').prepare()
             prep = HttpNegotiateAuth()(prep)
             header = prep.headers.get('Authorization', '')
-            logger.warning(f'  [SSPI] Option 2 header: {header[:60] if header else "(empty)"}')
             if header.startswith('Negotiate '):
-                token = header.split(' ', 1)[1]
-                logger.warning(f'  [SSPI] Option 2 OK: token length={len(token)}')
-                return token
-            else:
-                logger.warning('  [SSPI] Option 2: header does not contain Negotiate token')
+                return header.split(' ', 1)[1]
         except Exception as _e:
-            logger.warning(f'  [SSPI] Option 2 error: {type(_e).__name__}: {_e}')
+            logger.debug(f'  SSPI requests_negotiate_sspi token error: {type(_e).__name__}: {_e}')
 
-        logger.warning('  [SSPI] All token options failed — falling back to unauthenticated CONNECT (expect 407)')
+        logger.debug('  SSPI: all token backends failed — falling back to unauthenticated CONNECT')
         return ''  # no token available — caller falls back to unauthenticated
 
     def _sspi_tunnel(self):

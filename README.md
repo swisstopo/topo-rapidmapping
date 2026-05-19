@@ -145,7 +145,13 @@ export STAC_PASSWORD=your_password
 
 ### Proxy-Konfiguration
 
-Erstelle `secrets/proxy_config.json`:
+Kopiere die Beispiel-Datei und passe die URL an:
+
+```bash
+cp proxy_config.examples secrets/proxy_config.json
+```
+
+Dann nur die URL anpassen — der Rest wird automatisch erkannt:
 
 ```json
 {
@@ -154,11 +160,6 @@ Erstelle `secrets/proxy_config.json`:
       "name": "Mein Proxy",
       "url": "http://mein-proxy.ch:8080",
       "enabled": true
-    },
-    {
-      "name": "Alternative Proxy",
-      "url": "http://your-proxy:8080",
-      "enabled": false
     }
   ],
   "test_url": "https://data.geo.admin.ch/browser/index.html",
@@ -167,11 +168,20 @@ Erstelle `secrets/proxy_config.json`:
 }
 ```
 
-**Features:**
-- ✅ **Automatische Proxy-Erkennung**: Testet direkte Verbindung zuerst
-- ✅ **VPN-Detection**: Erkennt VPN mit SSL-Inspection und deaktiviert SSL-Verifikation automatisch
-- ✅ **Multi-Proxy-Support**: Testet alle aktivierten Proxies in Reihenfolge
-- ✅ **Fallback**: Bei fehlender Config wird Default-Proxy versucht
+**Automatische Erkennung (kein manueller Eingriff nötig):**
+- ✅ **Direkte Verbindung**: Wird zuerst versucht (z.B. mit aktivem VPN-Client)
+- ✅ **System-Proxy**: Liest Windows-Proxy-Einstellungen automatisch aus
+- ✅ **Kerberos/Negotiate**: Corporate-Proxies mit Windows-Anmeldung funktionieren automatisch
+- ✅ **VPN/SSL-Inspection**: Erkennt SSL-Inspection und deaktiviert SSL-Verifikation automatisch
+- ✅ **Ohne Config**: Funktioniert auch ohne `proxy_config.json` wenn System-Proxy gesetzt ist
+
+**Kerberos / Corporate Proxy (z.B. Bundesverwaltung):**
+
+Wenn dein Proxy Windows-Kerberos-Authentifizierung verlangt (typisch in AD-Umgebungen):
+```bash
+pip install requests-negotiate-sspi
+```
+Danach läuft alles automatisch — keine weitere Konfiguration nötig.
 
 ## 💻 Verwendung
 
@@ -478,10 +488,23 @@ class ProductType(Enum):
 ```
 ✗ Keine Internet-Verbindung möglich
 ```
-**Lösung:** 
-- Proxy-Einstellungen prüfen in `secrets/proxy_config.json`
+**Lösung:**
+- Proxy-URL in `secrets/proxy_config.json` prüfen
 - Proxy-URL testen: `curl -x http://mein-proxy:8080 https://data.geo.admin.ch`
 - Bei VPN: Script erkennt automatisch SSL-Inspection und passt Settings an
+
+### 407 Proxy Authentication Required (Corporate-Proxy)
+```
+ProxyError: Tunnel connection failed: 407 Proxy authentication required
+```
+**Ursache:** Der Proxy verlangt Windows-Kerberos-Authentifizierung (Negotiate/SSPI).
+
+**Lösung:**
+```bash
+pip install requests-negotiate-sspi
+```
+Voraussetzungen: Windows, am Active-Directory-Domain angemeldet.
+Das Tool erkennt danach automatisch dass Kerberos benötigt wird — keine weitere Konfiguration.
 
 ### Credentials fehlen
 ```
@@ -895,7 +918,7 @@ If the above fails
 
 1. run pyinstaller 
    ```sh
-   pyinstaller --noconfirm --onedir --console --noupx --name rapidmapping_processor --add-data "configuration.py;." --add-data "utilities;utilities" --add-data "util_publish_stac_fsdi.py;." --add-data "main_multipart_upload_via_api.py;." --hidden-import=utilities.credentials --hidden-import=utilities.proxy_handler --hidden-import=utilities.file_handler --hidden-import=utilities.mosaic_processor --hidden-import=utilities.photo_processor --hidden-import=utilities.kml_generator --hidden-import=utilities.stac_publisher --hidden-import=rasterio.serde --hidden-import=rasterio._shim --hidden-import=rasterio.sample --collect-submodules=rasterio rapidmapping_processor.py
+   pyinstaller --noconfirm --onedir --console --noupx --name rapidmapping_processor --add-data "configuration.py;." --add-data "utilities;utilities" --add-data "util_publish_stac_fsdi.py;." --add-data "main_multipart_upload_via_api.py;." --hidden-import=utilities.credentials --hidden-import=utilities.proxy_handler --hidden-import=utilities.file_handler --hidden-import=utilities.mosaic_processor --hidden-import=utilities.photo_processor --hidden-import=utilities.kml_generator --hidden-import=utilities.stac_publisher --hidden-import=requests_negotiate_sspi --hidden-import=sspi --hidden-import=sspicon --hidden-import=win32timezone --hidden-import=rasterio.serde --hidden-import=rasterio._shim --hidden-import=rasterio.sample --collect-submodules=rasterio rapidmapping_processor.py
    ```
   
 
@@ -937,6 +960,11 @@ Bei Problemen:
 MIT
 
 ## ✨ Version History
+
+### v2.3 (2025-05)
+- ✅ **Kerberos-Proxy EXE-Fix**: 407-Fehler in der generierten EXE behoben (win32timezone + SSPI-Tunnel-Patch)
+- ✅ **GDAL Performance**: Alle GDAL-Operationen nutzen jetzt `NUM_THREADS ALL_CPUS` und `GDAL_CACHEMAX 512`
+- ✅ **Proxy-Doku**: Verbesserte Dokumentation und `proxy_config.examples`
 
 ### v2.2 (2025-05)
 - ✅ **QDOP-DMC4**: Neuer Produkttyp für 4-Kanal DMC4-Bildstreifen (→ RGB + NRG COG)

@@ -178,6 +178,9 @@ pyinstaller --noconfirm --console ^
     --hidden-import=utilities.photo_processor ^
     --hidden-import=utilities.kml_generator ^
     --hidden-import=utilities.stac_publisher ^
+    --hidden-import=requests_negotiate_sspi ^
+    --hidden-import=sspi ^
+    --hidden-import=sspicon ^
     --hidden-import=rasterio.serde ^
     --hidden-import=rasterio._shim ^
     --hidden-import=rasterio.sample ^

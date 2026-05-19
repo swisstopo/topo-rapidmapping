@@ -2,7 +2,7 @@
 
 Automatisiertes System für die Publikation von Rapid Mapping Daten auf der FSDI STAC Plattform.
 
-## 🎯 Übersicht
+## Übersicht
 
 Dieses Tool vereint die Funktionalität von:
 - Orthophoto-Mosaike
@@ -11,18 +11,18 @@ Dieses Tool vereint die Funktionalität von:
 
 in einem einzigen, benutzerfreundlichen Workflow mit automatischer Proxy-Erkennung und VPN-Support.
 
-### ⚡ Hauptfeatures
+### Hauptfeatures
 
-- ✅ **Single COG-File Workflow**: Prüft ob Input bereits COG-konform ist (8-bit RGB, 3 Bänder)
-- ✅ **DMC4-Workflow**: Verarbeitet 4-Kanal DMC4-Bildstreifen automatisch zu RGB + NRG COG
-- ✅ **Automatische Proxy-Erkennung**: VPN- und Corporate-Proxy-Support mit SSL-Handling
-- ✅ **EXIF-Extraktion**: GPS und Zeitstempel aus Einzelbildern
-- ✅ **KML-Overview**: Automatische Generierung via STAC-Abfrage nach Upload
-- ✅ **Multi-Environment**: INT und PROD-Support
-- ✅ **Batch-Upload**: Einzelbilder werden sequenziell hochgeladen
-- ✅ **Error Handling**: Robuste Fehlerbehandlung mit detaillierten Logs
+- **Single COG-File Workflow (QDOP)**: Prüft ob Input bereits COG-konform ist (8-bit RGB, 3 Bänder)
+- **DMC4-Workflow (QDOP)**: Verarbeitet 4-Kanal DMC4-Bildstreifen automatisch zu RGB + NRG COG
+- **Automatische Proxy-Erkennung**: VPN- und Corporate-Proxy-Support mit SSL-Handling
+- **EXIF-Extraktion für (EBN, EBO)**: GPS und Zeitstempel aus Einzelbildern
+- **KML-Overview (EBN, EBO)**: Automatische Generierung via STAC-Abfrage nach Upload
+- **Multi-Environment**: INT und PROD-Support
+- **Batch-Upload**: Einzelbilder werden sequenziell hochgeladen
+- **Error Handling**: Robuste Fehlerbehandlung mit detaillierten Logs
 
-## 📁 Projektstruktur
+## Projektstruktur
 
 ```
 rapidmapping_processor/
@@ -48,7 +48,7 @@ rapidmapping_processor/
 
 ```
 
-## 🚀 Installation
+## Installation
 
 ### 1. GDAL-Tools installieren (kommt mit QGIS)
 
@@ -105,13 +105,13 @@ setup.bat
 ```
 
 Dieses Script prüft:
-- ✓ Python-Installation
-- ✓ GDAL-Verfügbarkeit
-- ✓ Erstellt Verzeichnisstruktur
-- ✓ Installiert Dependencies
-- ✓ Prüft Credentials
+- Python-Installation
+- GDAL-Verfügbarkeit
+- Erstellt Verzeichnisstruktur
+- Installiert Dependencies
+- Prüft Credentials
 
-## 🔐 Konfiguration
+## Konfiguration
 
 ### STAC Credentials
 
@@ -143,15 +143,35 @@ export STAC_USERNAME=your_username
 export STAC_PASSWORD=your_password
 ```
 
-### Proxy-Konfiguration
+### Netzwerk und Proxy-Konfiguration
 
-Kopiere die Beispiel-Datei und passe die URL an:
+Das Tool testet beim Start die Netzwerkverbindung in einer festen Reihenfolge. In den meisten Fällen ist kein manueller Eingriff nötig.
+
+#### Automatische Erkennung (Reihenfolge)
+
+**Schritt 1: Direkte Verbindung (kein Proxy)**
+Das Tool versucht zuerst eine direkte Verbindung ohne Proxy. Das funktioniert z.B. wenn ein VPN-Client das Routing transparent übernimmt.
+
+**Schritt 2: System-Proxy**
+Schlägt Schritt 1 fehl, liest das Tool den Proxy automatisch aus den Windows-Systemeinstellungen (Systemsteuerung > Internetoptionen > Verbindungen > LAN-Einstellungen) sowie aus den Umgebungsvariablen `HTTP_PROXY` und `HTTPS_PROXY`. Keine Konfigurationsdatei erforderlich.
+
+- Wenn der System-Proxy Kerberos/Negotiate-Authentifizierung verlangt (typisch in AD-Umgebungen): Die Authentifizierung erfolgt automatisch mit den Windows-Anmeldedaten des eingeloggten Benutzers. Voraussetzung: `pip install pyspnego`.
+- Wenn der System-Proxy keine Authentifizierung verlangt: wird direkt verwendet.
+
+**Schritt 3: Proxies aus `secrets/proxy_config.json`**
+Nur wenn Schritt 1 und 2 fehlschlagen. Nützlich wenn der System-Proxy in Windows nicht konfiguriert ist, die Proxy-URL aber bekannt ist.
+
+#### VPN und SSL-Inspektion
+
+Manche VPN- oder Firewall-Lösungen führen eine SSL-Inspektion durch (Man-in-the-Middle auf HTTPS). Das Tool erkennt das automatisch und deaktiviert bei Bedarf die SSL-Zertifikatsprüfung. Die Option `disable_ssl_warnings` in `proxy_config.json` unterdrückt die daraus resultierenden urllib3-Warnungen.
+
+#### proxy_config.json
+
+Optionale Datei unter `secrets/proxy_config.json`. Kopieren aus `proxy_config.examples` und URL anpassen. Nur nötig wenn der System-Proxy nicht in den Windows-Einstellungen konfiguriert ist.
 
 ```bash
 cp proxy_config.examples secrets/proxy_config.json
 ```
-
-Dann nur die URL anpassen — der Rest wird automatisch erkannt:
 
 ```json
 {
@@ -168,24 +188,19 @@ Dann nur die URL anpassen — der Rest wird automatisch erkannt:
 }
 ```
 
-**Automatische Erkennung (kein manueller Eingriff nötig):**
-- ✅ **Direkte Verbindung**: Wird zuerst versucht (z.B. mit aktivem VPN-Client)
-- ✅ **System-Proxy**: Liest Windows-Proxy-Einstellungen automatisch aus
-- ✅ **Kerberos/Negotiate**: Corporate-Proxies mit Windows-Anmeldung funktionieren automatisch
-- ✅ **VPN/SSL-Inspection**: Erkennt SSL-Inspection und deaktiviert SSL-Verifikation automatisch
-- ✅ **Ohne Config**: Funktioniert auch ohne `proxy_config.json` wenn System-Proxy gesetzt ist
+#### Kerberos / Corporate Proxy (z.B. Bundesverwaltung)
 
-**Kerberos / Corporate Proxy (z.B. Bundesverwaltung):**
+Wenn der Proxy Windows-Kerberos-Authentifizierung verlangt (typisch in AD-Umgebungen):
 
-Wenn dein Proxy Windows-Kerberos-Authentifizierung verlangt (typisch in AD-Umgebungen):
 ```bash
 pip install pyspnego        # empfohlen (modern, aktiv gepflegt, kein pywin32 nötig)
 # ODER Legacy-Fallback:
 pip install requests-negotiate-sspi
 ```
-Danach läuft alles automatisch — keine weitere Konfiguration nötig.
 
-## 💻 Verwendung
+Voraussetzungen: Windows, am Active-Directory-Domain angemeldet. Danach läuft alles automatisch — keine weitere Konfiguration nötig.
+
+## Verwendung
 
 ### Grundlegende Commands
 
@@ -215,7 +230,7 @@ Das Script führt durch folgende Schritte:
 4. **Zeitstempel** (bei Mosaiken) oder nur Datum (bei Einzelbildern)
 5. **Bestätigung** und Start
 
-## 📦 Produkttypen & Workflows
+## Produkttypen & Workflows
 
 ### 1. QDOP RGB/NRG Mosaike (Orthophotos)
 
@@ -356,7 +371,7 @@ Asset: ram-2024-07-15t14300000-qdop-nrg-mosaic.tif
 Asset: thumbnail.jpg
 ```
 
-## 🗺️ KML-Overview Generation
+## KML-Overview Generation
 
 Nach Upload aller Einzelbilder wird automatisch ein KML-Overview erstellt:
 
@@ -392,7 +407,7 @@ Nach Upload aller Einzelbilder wird automatisch ein KML-Overview erstellt:
 </kml>
 ```
 
-## 📋 Namenskonventionen
+## Namenskonventionen
 
 ### Format
 ```
@@ -441,7 +456,7 @@ Beispiele:
 - ram-2024-07-15t23595900          (KML-Overview-Item EBN oder EBO)
 ```
 
-## 🔧 Konfigurationsdateien
+## Konfigurationsdateien
 
 ### configuration.py
 
@@ -475,7 +490,7 @@ class ProductType(Enum):
     EBO       = "ebo"         # Einzelbilder Oblique
 ```
 
-## 🛠️ Troubleshooting
+## Troubleshooting
 
 ### GDAL nicht gefunden
 ```
@@ -557,7 +572,7 @@ gdal_translate -of COG \
 }
 ```
 
-## 📊 Logging
+## Logging
 
 Das Script gibt detailliertes Feedback:
 
@@ -588,7 +603,7 @@ temp/
 └── ...                             # Weitere temporäre Dateien
 ```
 
-## 📄 Workflow-Diagramm
+## Workflow-Diagramm
 
 ### Orthophoto-Mosaike (QDOP-RGB / QDOP-NRG)
 ```
@@ -664,7 +679,7 @@ Nach allen Uploads:
           └─ Asset: ram-YYYY-MM-DDt23595900-ebn.txt
 ```
 
-## 🤝 Integration mit bestehenden Scripts
+## Integration mit bestehenden Scripts
 
 Das System nutzt die bestehenden Module:
 - `util_publish_stac_fsdi.py`: STAC-Publikation
@@ -672,7 +687,7 @@ Das System nutzt die bestehenden Module:
 
 Diese Module werden **NICHT modifiziert** und müssen im gleichen Verzeichnis liegen.
 
-## 🔒 Sicherheit
+## Sicherheit
 
 ### Credentials
 - **NIE in Git committen!**
@@ -695,7 +710,7 @@ __pycache__/
 *.log
 ```
 
-## 🚦 Übergabe an CMS (rapidmapping.ch)
+## Übergabe an CMS (rapidmapping.ch)
 
 Nach erfolgreichem Upload gibt das Script URLs aus für die Integration auf rapidmapping.ch:
 
@@ -715,7 +730,7 @@ Nächster Schritt für Einzelbilder Nadir:
 Kartenausschnitt: als iFrame in rapidmapping.ch integrieren
 ```
 
-## 🛠️ Utilities
+## Utilities
 
 Wir stellen mehrere Hilfs-Scripts zur Verfügung, die bei verschiedenen Aufgaben unterstützen. Diese befinden sich im Verzeichnis [utilities](utilities/).
 
@@ -885,7 +900,8 @@ python util_stac_delete_ram.py
 2. Geben Sie Item-Name oder Datum ein
 3. Bestätigen Sie die Löschung
 
-**⚠️ Vorsicht:** Gelöschte Items können nicht wiederhergestellt werden!
+**Vorsicht:** Gelöschte Items können nicht wiederhergestellt werden!
+
 ## Generate Executable binaries / EXE  ( for now: WINDOWS only)
 
 The WINDOWS version was created with pyinstaller. [quite a thing](https://stackoverflow.com/questions/56472933/pyinstaller-executable-fails).
@@ -932,7 +948,7 @@ If the above fails
 
 3. The generated EXE must be *signed* by the IT department (ask Urs B.). 
 
-## 📞 Support
+## Support
 
 Bei Problemen:
 1. Log-Output prüfen
@@ -940,7 +956,7 @@ Bei Problemen:
 3. GDAL-Installation testen: `gdalinfo --version`
 4. Proxy-Verbindung testen (siehe Troubleshooting)
 
-## ⚡ Performance-Tipps
+## Performance-Tipps
 
 ### Upload-Geschwindigkeit
 - **Multipart-Upload**: Automatisch für große Dateien (>100MB)
@@ -952,40 +968,40 @@ Bei Problemen:
 - **Proxy-Tests**: Cached nach erstem Durchlauf
 - **Timeout**: Anpassbar in `proxy_config.json`
 
-## 📚 Weiterführende Dokumentation
+## Weiterführende Dokumentation
 
 - **GDAL COG Best Practices**: https://github.com/geostandards-ch/cog-best-practices
 - **STAC Specification**: https://stacspec.org/
 - **FSDI STAC Browser**: https://data.geo.admin.ch/browser/
 - **OSGeo4W**: https://trac.osgeo.org/osgeo4w/
 
-## 📄 Lizenz
+## Lizenz
 
 MIT
 
-## ✨ Version History
+## Version History
 
 ### v2.3 (2025-05)
-- ✅ **Kerberos-Proxy EXE-Fix**: 407-Fehler in der generierten EXE behoben (win32timezone + SSPI-Tunnel-Patch)
-- ✅ **GDAL Performance**: Alle GDAL-Operationen nutzen jetzt `NUM_THREADS ALL_CPUS` und `GDAL_CACHEMAX 512`
-- ✅ **Proxy-Doku**: Verbesserte Dokumentation und `proxy_config.examples`
+- **Kerberos-Proxy EXE-Fix**: 407-Fehler in der generierten EXE behoben (win32timezone + SSPI-Tunnel-Patch)
+- **GDAL Performance**: Alle GDAL-Operationen nutzen jetzt `NUM_THREADS ALL_CPUS` und `GDAL_CACHEMAX 512`
+- **Proxy-Doku**: Verbesserte Dokumentation und `proxy_config.examples`
 
 ### v2.2 (2025-05)
-- ✅ **QDOP-DMC4**: Neuer Produkttyp für 4-Kanal DMC4-Bildstreifen (→ RGB + NRG COG)
-- ✅ **Overview-Naming**: Kein `-overview`-Suffix mehr im STAC Item-Namen; Produktkürzel (`ebn`/`ebo`) im Asset-Dateinamen
-- ✅ **EBO-Overview-Icon**: Korrektes Kamera-Icon für EBO KML-Overview-Items
-- ✅ Alle Item-Namen und Assets enthalten immer 2-stelligen Hundertelsekunden-Suffix (`cc`, default `00`)
+- **QDOP-DMC4**: Neuer Produkttyp für 4-Kanal DMC4-Bildstreifen (→ RGB + NRG COG)
+- **Overview-Naming**: Kein `-overview`-Suffix mehr im STAC Item-Namen; Produktkürzel (`ebn`/`ebo`) im Asset-Dateinamen
+- **EBO-Overview-Icon**: Korrektes Kamera-Icon für EBO KML-Overview-Items
+- Alle Item-Namen und Assets enthalten immer 2-stelligen Hundertelsekunden-Suffix (`cc`, default `00`)
 
 ### v2.0 (2025-01)
-- ✅ Single COG-File Workflow (kein Mosaic mehr im Script)
-- ✅ Subprocess-basiertes GDAL (keine Python-Bindings erforderlich)
-- ✅ VPN-Support mit automatischer SSL-Erkennung
-- ✅ KML-Overview via STAC-Abfrage nach Upload
-- ✅ Batch-Upload für Einzelbilder
-- ✅ Robustes Error Handling
-- ✅ Multi-Environment Support (INT/PROD)
+- Single COG-File Workflow (kein Mosaic mehr im Script)
+- Subprocess-basiertes GDAL (keine Python-Bindings erforderlich)
+- VPN-Support mit automatischer SSL-Erkennung
+- KML-Overview via STAC-Abfrage nach Upload
+- Batch-Upload für Einzelbilder
+- Robustes Error Handling
+- Multi-Environment Support (INT/PROD)
 
 ### v1.0 (Legacy)
-- ✓ Mosaic-Erstellung im Script
-- ✓ Basic STAC-Upload
-- ✓ Einzelbild-Verarbeitung
+- Mosaic-Erstellung im Script
+- Basic STAC-Upload
+- Einzelbild-Verarbeitung

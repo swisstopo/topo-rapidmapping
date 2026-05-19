@@ -273,7 +273,6 @@ def _install_kerberos_tunnel_patch():
     Idempotent:  installs the patch only once (guarded by _kerberos_patched flag).
     """
     import http.client
-    import socket as _socket
     import base64 as _b64
 
     if getattr(http.client.HTTPConnection, '_kerberos_patched', False):
@@ -282,63 +281,41 @@ def _install_kerberos_tunnel_patch():
     _orig_tunnel = http.client.HTTPConnection._tunnel
 
     def _sspi_tunnel(self):
-        # urllib3.close() (called inside stdlib _tunnel on any non-200 response)
-        # clears self._tunnel_host = None and self._tunnel_headers = {}.
-        # Save them now so we can restore them after the 407 response.
-        saved_host    = self._tunnel_host
-        saved_port    = self._tunnel_port
-        saved_headers = dict(getattr(self, '_tunnel_headers', {}))
+        # Strategy: pre-authenticate the CONNECT with a fresh SSPI Negotiate token.
+        #
+        # Why NOT "try unauthenticated first, retry on 407":
+        #   urllib3.connect() saves the socket in a local variable BEFORE calling
+        #   _tunnel(). If _tunnel() closes and replaces self.sock (on 407 reconnect),
+        #   urllib3 still passes the now-closed original socket to ssl_wrap_socket
+        #   → WinError 10038 "not a socket".
+        #
+        # Pre-authenticating avoids any 407 response, so self.sock is never closed
+        # and the local variable in urllib3.connect() remains valid throughout.
 
-        # First attempt without explicit proxy auth
-        try:
-            return _orig_tunnel(self)
-        except OSError as e:
-            if '407' not in str(e):
-                raise
-            # 407 Proxy Authentication Required — retry with SSPI Negotiate
-
-        # Restore tunnel metadata cleared by urllib3.close() inside _orig_tunnel
-        self._tunnel_host    = saved_host
-        self._tunnel_port    = saved_port
-        self._tunnel_headers = dict(saved_headers)
-
+        token: str = ''
         try:
             import sspi as _sspi
-        except ImportError:
-            raise OSError(
-                'Tunnel connection failed: 407 Proxy Authentication Required\n'
-                '  pywin32 (sspi) nicht verfügbar. Installiere: pip install pywin32'
-            )
-
-        # Generate SSPI Negotiate token; self.host is the PROXY when using ProxyManager
-        try:
             clientauth = _sspi.ClientAuth('Negotiate', targetspn=f'HTTP/{self.host}')
             _, out_buf = clientauth.authorize(None)
             token = _b64.b64encode(out_buf[0].Buffer).decode()
-        except Exception as ex:
-            raise OSError(
-                f'Tunnel connection failed: 407 Proxy Authentication Required\n'
-                f'  SSPI-Token-Generierung fehlgeschlagen: {ex}'
-            )
+        except ImportError:
+            pass   # sspi not available — fall through without auth (may hit 407)
+        except Exception:
+            pass   # SSPI token generation failed — fall through without auth
 
-        # urllib3.close() also closed the socket — re-establish TCP to proxy
-        try:
-            timeout = self.timeout if self.timeout is not None else _socket.getdefaulttimeout()
-            src = getattr(self, 'source_address', None)
-            self.sock = _socket.create_connection((self.host, self.port), timeout, src)
-        except Exception as ex:
-            raise OSError(
-                f'Tunnel connection failed: 407 Proxy Authentication Required\n'
-                f'  Wiederverbindung zum Proxy fehlgeschlagen: {ex}'
-            )
+        if not token:
+            return _orig_tunnel(self)
 
-        # Retry the CONNECT with the Negotiate token
+        # Inject Negotiate token into the CONNECT headers for this call only
+        saved_auth = self._tunnel_headers.pop('Proxy-Authorization', None)
         self._tunnel_headers['Proxy-Authorization'] = f'Negotiate {token}'
         try:
             return _orig_tunnel(self)
         finally:
-            # Remove the auth header we injected (leave other headers intact)
+            # Restore previous state (normally no Proxy-Authorization was present)
             self._tunnel_headers.pop('Proxy-Authorization', None)
+            if saved_auth is not None:
+                self._tunnel_headers['Proxy-Authorization'] = saved_auth
 
     http.client.HTTPConnection._tunnel = _sspi_tunnel
     http.client.HTTPConnection._kerberos_patched = True

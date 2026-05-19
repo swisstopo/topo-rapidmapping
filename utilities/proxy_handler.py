@@ -297,28 +297,38 @@ def _install_kerberos_tunnel_patch():
         # ── Option 1: pywin32.sspi ────────────────────────────────────────────
         try:
             import sspi as _sspi
+            logger.warning('  [SSPI] Option 1: pywin32.sspi imported OK')
             auth = _sspi.ClientAuth('Negotiate', targetspn=f'HTTP/{proxy_host}')
             _, out_buf = auth.authorize(None)
-            return _b64.b64encode(out_buf[0].Buffer).decode()
-        except ImportError:
-            pass  # pywin32 not installed — try next option
-        except Exception:
-            pass  # unexpected error — try next option
+            token = _b64.b64encode(out_buf[0].Buffer).decode()
+            logger.warning(f'  [SSPI] Option 1 OK: token length={len(token)}')
+            return token
+        except ImportError as _e:
+            logger.warning(f'  [SSPI] Option 1 ImportError: {_e}')
+        except Exception as _e:
+            logger.warning(f'  [SSPI] Option 1 error: {type(_e).__name__}: {_e}')
 
         # ── Option 2: requests_negotiate_sspi (works with pywin32-ctypes) ────
         try:
             import requests as _req
             from requests_negotiate_sspi import HttpNegotiateAuth
+            logger.warning('  [SSPI] Option 2: requests_negotiate_sspi imported OK')
             # Prepare a dummy request to the proxy host so HttpNegotiateAuth
             # generates an initial Negotiate token for HTTP/<proxy_host> SPN.
             prep = _req.Request('GET', f'http://{proxy_host}/').prepare()
             prep = HttpNegotiateAuth()(prep)
             header = prep.headers.get('Authorization', '')
+            logger.warning(f'  [SSPI] Option 2 header: {header[:60] if header else "(empty)"}')
             if header.startswith('Negotiate '):
-                return header.split(' ', 1)[1]
-        except Exception:
-            pass
+                token = header.split(' ', 1)[1]
+                logger.warning(f'  [SSPI] Option 2 OK: token length={len(token)}')
+                return token
+            else:
+                logger.warning('  [SSPI] Option 2: header does not contain Negotiate token')
+        except Exception as _e:
+            logger.warning(f'  [SSPI] Option 2 error: {type(_e).__name__}: {_e}')
 
+        logger.warning('  [SSPI] All token options failed — falling back to unauthenticated CONNECT (expect 407)')
         return ''  # no token available — caller falls back to unauthenticated
 
     def _sspi_tunnel(self):

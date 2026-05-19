@@ -166,19 +166,51 @@ def detect_vpn_connection(proxies: Optional[Dict] = None, test_urls: List[str] =
 
 def _get_system_proxy_urls() -> List[str]:
     """
-    Read proxy URLs configured in the OS (Windows registry, env vars, macOS).
-    Also checks GDAL/QGIS-specific env var keys (gdal_https, gdal_http).
+    Read proxy URLs from all available sources:
+      1. urllib.request.getproxies()  — OS registry + standard env vars
+      2. Direct env var scan          — catches GDAL/QGIS and non-standard names
     Returns a deduplicated list ordered https-first.
     """
+    import os
+
     raw = urllib.request.getproxies()
+
+    # Log raw output once so we can diagnose key-name surprises
+    if raw:
+        logger.debug(f"    urllib.request.getproxies() → {raw}")
+    else:
+        logger.debug("    urllib.request.getproxies() → (leer)")
+
+    # Also scan environment variables directly for proxy-related keys.
+    # Covers: HTTP_PROXY, HTTPS_PROXY, GDAL_HTTP_PROXY, ALL_PROXY, etc.
+    _proxy_env_keys = (
+        'https_proxy', 'http_proxy', 'all_proxy',
+        'HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY',
+        'GDAL_HTTP_PROXY', 'GDAL_HTTPS_PROXY',
+        'gdal_http_proxy', 'gdal_https_proxy',
+    )
+    env_proxies: dict = {}
+    for key in _proxy_env_keys:
+        val = os.environ.get(key)
+        if val:
+            env_proxies[key] = val
+            logger.debug(f"    env {key} = {val}")
+
     seen: set = set()
     result: List[str] = []
-    # Check in priority order: prefer https over http, GDAL keys as fallback
+
+    # Priority: urllib result first (https before http), then env scan
     for key in ('https', 'http', 'gdal_https', 'gdal_http'):
         url = raw.get(key)
         if url and url not in seen:
             seen.add(url)
             result.append(url)
+
+    for url in env_proxies.values():
+        if url and url not in seen:
+            seen.add(url)
+            result.append(url)
+
     return result
 
 
@@ -335,7 +367,11 @@ def detect_proxy_requirement() -> Dict:
     # Strategy: always try Kerberos/SSPI first when a system proxy is found.
     # Corporate proxies often require Negotiate auth without sending a 407 first
     # (they just drop the connection). Kerberos auth on a non-auth proxy is harmless.
+    # Temporarily force DEBUG so the env-var dump is always printed here.
+    _prev_level = logging.getLogger().level
+    logging.getLogger().setLevel(logging.DEBUG)
     system_proxies = _get_system_proxy_urls()
+    logging.getLogger().setLevel(_prev_level)
     if system_proxies:
         logger.info(f"  [2] System-Proxy gefunden: {system_proxies}")
         for proxy_url in system_proxies:

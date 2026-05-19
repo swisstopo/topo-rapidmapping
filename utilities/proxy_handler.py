@@ -31,13 +31,19 @@ PROXY_CONFIG = {
     'session': None,
     'verify_ssl': True,
     'active_proxy': None,
-    'initialized': False,  # Markiert ob bereits initialisiert
-    'is_vpn': False  # NEW: Markiert ob VPN-Verbindung erkannt wurde
+    'initialized': False,
+    'is_vpn': False,
+    'auth_method': None,   # 'kerberos/negotiate-sspi' | 'kerberos/kerberos-proxy-auth' | None
 }
 
 # Thread-Lock: verhindert parallele Proxy-Initialisierung durch Worker-Threads
 import threading as _threading
 _PROXY_INIT_LOCK = _threading.Lock()
+
+# Thread-local storage: each worker thread gets its own Kerberos session.
+# SSPI auth contexts are thread-bound — sharing one session across threads
+# causes 407 errors on every CONNECT from non-main threads.
+_thread_sessions = _threading.local()
 
 
 # Default Settings (Fallback wenn keine Config-Datei vorhanden)
@@ -175,13 +181,7 @@ def _get_system_proxy_urls() -> List[str]:
 
     raw = urllib.request.getproxies()
 
-    # Log raw output once so we can diagnose key-name surprises
-    if raw:
-        logger.debug(f"    urllib.request.getproxies() → {raw}")
-    else:
-        logger.debug("    urllib.request.getproxies() → (leer)")
-
-    # Also scan environment variables directly for proxy-related keys.
+    # Scan environment variables directly for proxy-related keys.
     # Covers: HTTP_PROXY, HTTPS_PROXY, GDAL_HTTP_PROXY, ALL_PROXY, etc.
     _proxy_env_keys = (
         'https_proxy', 'http_proxy', 'all_proxy',
@@ -194,7 +194,6 @@ def _get_system_proxy_urls() -> List[str]:
         val = os.environ.get(key)
         if val:
             env_proxies[key] = val
-            logger.debug(f"    env {key} = {val}")
 
     seen: set = set()
     result: List[str] = []
@@ -343,7 +342,8 @@ def detect_proxy_requirement() -> Dict:
 
     # ── Helper: build a plain result dict ────────────────────────────────────
     def _ok(name: Optional[str], proxies_dict, verify: bool,
-            session: requests.Session, is_vpn: bool = False) -> dict:
+            session: requests.Session, is_vpn: bool = False,
+            auth_method: Optional[str] = None) -> dict:
         return {
             'enabled':      proxies_dict is not None,
             'proxies':      proxies_dict,
@@ -352,6 +352,7 @@ def detect_proxy_requirement() -> Dict:
             'active_proxy': name,
             'initialized':  True,
             'is_vpn':       is_vpn,
+            'auth_method':  auth_method,
         }
 
     # ── Step 1: Direct connection ─────────────────────────────────────────────
@@ -367,11 +368,7 @@ def detect_proxy_requirement() -> Dict:
     # Strategy: always try Kerberos/SSPI first when a system proxy is found.
     # Corporate proxies often require Negotiate auth without sending a 407 first
     # (they just drop the connection). Kerberos auth on a non-auth proxy is harmless.
-    # Temporarily force DEBUG so the env-var dump is always printed here.
-    _prev_level = logging.getLogger().level
-    logging.getLogger().setLevel(logging.DEBUG)
     system_proxies = _get_system_proxy_urls()
-    logging.getLogger().setLevel(_prev_level)
     if system_proxies:
         logger.info(f"  [2] System-Proxy gefunden: {system_proxies}")
         for proxy_url in system_proxies:
@@ -386,7 +383,8 @@ def detect_proxy_requirement() -> Dict:
                     if r.status_code == 200:
                         logger.info(f"  ✓ System-Proxy OK (Kerberos/{method}): {proxy_url}")
                         return _ok(f"system:{proxy_url} (kerberos/{method})",
-                                   proxies_dict, False, session)
+                                   proxies_dict, False, session,
+                                   auth_method=f"kerberos/{method}")
                 except Exception:
                     pass
                 logger.info(f"  ✗ Kerberos/{method} für System-Proxy fehlgeschlagen")
@@ -468,6 +466,7 @@ def detect_proxy_requirement() -> Dict:
                     {"http": proxy_url, "https": proxy_url},
                     kprobe['verify_ssl'],
                     kprobe['session'],
+                    auth_method=f"kerberos/{kprobe['method']}"
                 )
             if kprobe['status'] == 'no_lib':
                 logger.warning(
@@ -525,24 +524,37 @@ def initialize_proxy():
 def get_session() -> requests.Session:
     """
     Gibt die konfigurierte requests Session zurück.
-    
-    Falls Proxy noch nicht initialisiert wurde, wird initialize_proxy() aufgerufen.
-    
+
+    Kerberos/SSPI-Sonderfall: SSPI-Auth-Kontexte sind thread-gebunden.
+    Eine Session, die im Haupt-Thread erstellt wurde, funktioniert nicht in
+    Worker-Threads (→ 407 auf CONNECT). Deshalb bekommt jeder Thread seine
+    eigene Kerberos-Session aus _thread_sessions (threading.local).
+
     Returns:
         requests.Session: Konfigurierte Session (mit oder ohne Proxy)
     """
     global PROXY_CONFIG
-    
-    # Falls noch nicht initialisiert, initialisiere jetzt
+
     if not PROXY_CONFIG.get('initialized', False):
         logger.warning("⚠️  Proxy noch nicht initialisiert - initialisiere jetzt...")
         initialize_proxy()
-    
+
     if PROXY_CONFIG['session'] is None:
         raise RuntimeError(
             "Session konnte nicht erstellt werden. Bitte Netzwerk-Verbindung prüfen."
         )
-    
+
+    # Kerberos: create a fresh session per thread
+    if PROXY_CONFIG.get('auth_method') and 'kerberos' in PROXY_CONFIG['auth_method']:
+        if not hasattr(_thread_sessions, 'session'):
+            session, _ = _make_kerberos_session(
+                PROXY_CONFIG.get('proxies'),
+                PROXY_CONFIG.get('verify_ssl', False)
+            )
+            _thread_sessions.session = session if session is not None else PROXY_CONFIG['session']
+            logger.debug(f"  ℹ Thread-lokale Kerberos-Session erstellt (Thread {_threading.current_thread().name})")
+        return _thread_sessions.session
+
     return PROXY_CONFIG['session']
 
 

@@ -179,6 +179,8 @@ Dann nur die URL anpassen — der Rest wird automatisch erkannt:
 
 Wenn dein Proxy Windows-Kerberos-Authentifizierung verlangt (typisch in AD-Umgebungen):
 ```bash
+pip install pyspnego        # empfohlen (modern, aktiv gepflegt, kein pywin32 nötig)
+# ODER Legacy-Fallback:
 pip install requests-negotiate-sspi
 ```
 Danach läuft alles automatisch — keine weitere Konfiguration nötig.
@@ -501,6 +503,8 @@ ProxyError: Tunnel connection failed: 407 Proxy authentication required
 
 **Lösung:**
 ```bash
+pip install pyspnego        # empfohlen (modern, aktiv gepflegt, kein pywin32 nötig)
+# ODER Legacy-Fallback:
 pip install requests-negotiate-sspi
 ```
 Voraussetzungen: Windows, am Active-Directory-Domain angemeldet.

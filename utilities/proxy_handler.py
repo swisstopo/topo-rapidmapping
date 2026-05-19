@@ -226,17 +226,52 @@ def _make_kerberos_session(
     verify_ssl: bool,
 ) -> Tuple[Optional[requests.Session], Optional[str]]:
     """
-    Try to build a requests Session with Kerberos/SSPI proxy authentication.
+    Erstellt eine requests-Session mit Kerberos/SSPI Proxy-Authentifizierung.
 
-    Tries in order:
-      1. requests-negotiate-sspi  — Windows SSPI; works on domain-joined machines
-                                    with no extra configuration.
-      2. kerberos-proxy-auth      — cross-platform alternative.
+    Versucht in Reihenfolge:
+      1. pyspnego  — modern, aktiv gepflegt, kein pywin32 nötig (nutzt sspilib/ctypes)
+      2. requests-negotiate-sspi  — Legacy-Fallback (funktioniert noch, aber nicht mehr gepflegt)
 
-    Returns (session, method_name) or (None, None) if no library is installed.
-    Install hint is logged once so the user knows how to fix it.
+    Gibt (session, method_name) oder (None, None) zurück wenn keine Bibliothek installiert.
     """
-    # Option 1: Windows SSPI (preferred)
+    # Proxy-Hostname für den SPNEGO SPN (HTTP/<proxy_host>) extrahieren
+    _proxy_host = ''
+    if proxies_dict:
+        from urllib.parse import urlparse as _urlparse
+        _proxy_host = _urlparse(next(iter(proxies_dict.values()), '')).hostname or ''
+
+    # Option 1: pyspnego (modern, aktiv gepflegt, kein pywin32 nötig)
+    #   pip install pyspnego
+    try:
+        import spnego as _spnego
+        import base64 as _b64s
+
+        class _SpnegoProxyAuth(requests.auth.AuthBase):
+            """Initialer SPNEGO-Token für Corporate-Proxies (Kerberos/NTLM)."""
+            def __call__(self, r):
+                ctx = _spnego.client(
+                    hostname=_proxy_host,
+                    service='http',
+                    protocol='negotiate',
+                )
+                out = ctx.step()
+                if out:
+                    r.headers['Proxy-Authorization'] = (
+                        f'Negotiate {_b64s.b64encode(out).decode()}'
+                    )
+                return r
+
+        session = requests.Session()
+        if proxies_dict:
+            session.proxies.update(proxies_dict)
+        session.verify = verify_ssl
+        session.auth = _SpnegoProxyAuth()
+        return session, "spnego"
+    except ImportError:
+        pass
+
+    # Option 2: requests-negotiate-sspi (Legacy-Fallback)
+    #   pip install requests-negotiate-sspi
     try:
         from requests_negotiate_sspi import HttpNegotiateAuth
         session = requests.Session()
@@ -248,22 +283,10 @@ def _make_kerberos_session(
     except ImportError:
         pass
 
-    # Option 2: cross-platform kerberos
-    try:
-        import kerberos_proxy_auth  # noqa: F401
-        kerberos_proxy_auth.install()   # patches requests globally
-        session = requests.Session()
-        if proxies_dict:
-            session.proxies.update(proxies_dict)
-        session.verify = verify_ssl
-        return session, "kerberos-proxy-auth"
-    except ImportError:
-        pass
-
     logger.warning(
-        "  ⚠ Kerberos-Bibliothek nicht installiert.\n"
-        "    Für Windows (Domäne):  pip install requests-negotiate-sspi\n"
-        "    Plattformübergreifend: pip install kerberos-proxy-auth"
+        "  ⚠ Keine Kerberos-Bibliothek gefunden.\n"
+        "    Empfohlen (modern):  pip install pyspnego\n"
+        "    Legacy-Fallback:     pip install requests-negotiate-sspi"
     )
     return None, None
 
@@ -296,42 +319,42 @@ def _install_kerberos_tunnel_patch():
 
     def _negotiate_token(proxy_host: str) -> str:
         """
-        Generate a Kerberos/SSPI Negotiate token for the given proxy host.
-        Returns the base64-encoded token string, or '' on failure.
+        Generates a Kerberos/SPNEGO Negotiate token for the proxy CONNECT request.
+        Returns base64-encoded token string, or '' if no backend is available.
 
-        Tries two backends in order:
-          1. pywin32.sspi             — fastest; requires full pywin32 package
-          2. requests_negotiate_sspi  — works with pywin32-ctypes (used in
-                                        virtualenvs and PyInstaller exes that
-                                        don't ship the full pywin32 package)
+        Tries in order:
+          1. pyspnego  — modern, no pywin32 needed (uses sspilib/ctypes)
+          2. pywin32.sspi  — classic; requires full pywin32
         """
-        # ── Option 1: pywin32.sspi ────────────────────────────────────────────
+        # ── Option 1: pyspnego (modern, kein pywin32 nötig) ──────────────────
+        try:
+            import spnego as _spnego
+            ctx = _spnego.client(
+                hostname=proxy_host,
+                service='http',
+                protocol='negotiate',
+            )
+            out = ctx.step()
+            if out:
+                return _b64.b64encode(out).decode()
+        except ImportError:
+            pass
+        except Exception as _e:
+            logger.debug(f'  SSPI pyspnego token error: {type(_e).__name__}: {_e}')
+
+        # ── Option 2: pywin32.sspi (Legacy-Fallback) ──────────────────────────
         try:
             import sspi as _sspi
             auth = _sspi.ClientAuth('Negotiate', targetspn=f'HTTP/{proxy_host}')
             _, out_buf = auth.authorize(None)
             return _b64.b64encode(out_buf[0].Buffer).decode()
         except ImportError:
-            pass  # pywin32 not available — try next option
+            pass
         except Exception as _e:
             logger.debug(f'  SSPI pywin32 token error: {type(_e).__name__}: {_e}')
 
-        # ── Option 2: requests_negotiate_sspi (works with pywin32-ctypes) ────
-        # HttpNegotiateAuth generates the initial Negotiate token when called
-        # with a PreparedRequest — even without a prior 407 challenge.
-        try:
-            import requests as _req
-            from requests_negotiate_sspi import HttpNegotiateAuth
-            prep = _req.Request('GET', f'http://{proxy_host}/').prepare()
-            prep = HttpNegotiateAuth()(prep)
-            header = prep.headers.get('Authorization', '')
-            if header.startswith('Negotiate '):
-                return header.split(' ', 1)[1]
-        except Exception as _e:
-            logger.debug(f'  SSPI requests_negotiate_sspi token error: {type(_e).__name__}: {_e}')
-
         logger.debug('  SSPI: all token backends failed — falling back to unauthenticated CONNECT')
-        return ''  # no token available — caller falls back to unauthenticated
+        return ''  # no token — caller falls back to unauthenticated
 
     def _sspi_tunnel(self):
         token = _negotiate_token(self.host)

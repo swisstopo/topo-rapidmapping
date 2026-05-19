@@ -40,11 +40,6 @@ PROXY_CONFIG = {
 import threading as _threading
 _PROXY_INIT_LOCK = _threading.Lock()
 
-# Thread-local storage: each worker thread gets its own Kerberos session.
-# SSPI auth contexts are thread-bound — sharing one session across threads
-# causes 407 errors on every CONNECT from non-main threads.
-_thread_sessions = _threading.local()
-
 
 # Default Settings (Fallback wenn keine Config-Datei vorhanden)
 DEFAULT_PROXY_CONFIG = {
@@ -525,11 +520,6 @@ def get_session() -> requests.Session:
     """
     Gibt die konfigurierte requests Session zurück.
 
-    Kerberos/SSPI-Sonderfall: SSPI-Auth-Kontexte sind thread-gebunden.
-    Eine Session, die im Haupt-Thread erstellt wurde, funktioniert nicht in
-    Worker-Threads (→ 407 auf CONNECT). Deshalb bekommt jeder Thread seine
-    eigene Kerberos-Session aus _thread_sessions (threading.local).
-
     Returns:
         requests.Session: Konfigurierte Session (mit oder ohne Proxy)
     """
@@ -543,17 +533,6 @@ def get_session() -> requests.Session:
         raise RuntimeError(
             "Session konnte nicht erstellt werden. Bitte Netzwerk-Verbindung prüfen."
         )
-
-    # Kerberos: create a fresh session per thread
-    if PROXY_CONFIG.get('auth_method') and 'kerberos' in PROXY_CONFIG['auth_method']:
-        if not hasattr(_thread_sessions, 'session'):
-            session, _ = _make_kerberos_session(
-                PROXY_CONFIG.get('proxies'),
-                PROXY_CONFIG.get('verify_ssl', False)
-            )
-            _thread_sessions.session = session if session is not None else PROXY_CONFIG['session']
-            logger.debug(f"  ℹ Thread-lokale Kerberos-Session erstellt (Thread {_threading.current_thread().name})")
-        return _thread_sessions.session
 
     return PROXY_CONFIG['session']
 

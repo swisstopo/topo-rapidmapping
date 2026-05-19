@@ -1878,10 +1878,27 @@ def process_individual_photos(
                     'lat': None, 'lon': None,
                 }
 
+        # Kerberos/SSPI-Proxy: urllib3's CONNECT-Tunnel-Handling raises OSError on 407
+        # before HttpNegotiateAuth can negotiate — happens in every worker thread,
+        # regardless of thread-local sessions. Force sequential mode so SSPI always
+        # runs on a single thread where the auth context is fully established.
+        if not debug:
+            try:
+                from utilities.proxy_handler import PROXY_CONFIG as _kpc
+                if _kpc.get('auth_method') and 'kerberos' in _kpc.get('auth_method', ''):
+                    logger.info(
+                        "  ℹ Kerberos-Proxy erkannt → sequentielle Verarbeitung erzwungen\n"
+                        "    (SSPI-Auth-Kontexte sind thread-gebunden; "
+                        "parallele Worker würden 407-Fehler verursachen)"
+                    )
+                    debug = True
+            except Exception:
+                pass
+
         # --- Ausführung: sequentiell (debug) oder parallel ---
         logger.info("\n" + "=" * 70)
         if debug:
-            logger.info("VERARBEITE PHOTOS — DEBUG-MODUS (sequentiell)")
+            logger.info("VERARBEITE PHOTOS — SEQUENTIELL (Kerberos-Proxy oder Debug-Modus)")
         else:
             n_proc = min(8, max(2, total))
             logger.info(f"VERARBEITE PHOTOS — PARALLEL ({n_proc} Workers)")

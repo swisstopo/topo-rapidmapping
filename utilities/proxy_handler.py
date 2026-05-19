@@ -255,6 +255,88 @@ def _make_kerberos_session(
     return None, None
 
 
+def _install_kerberos_tunnel_patch():
+    """
+    Monkey-patch http.client.HTTPConnection._tunnel to handle 407 Proxy Authentication
+    Required with Kerberos/SSPI Negotiate.
+
+    Problem: older urllib3 (e.g., QGIS-bundled) calls the stdlib _tunnel() which raises
+    OSError immediately on a 407 Proxy-Auth-Required response without giving the
+    requests-negotiate-sspi auth handler any chance to negotiate. This happens for ALL
+    HTTPS requests through an authenticating proxy, regardless of thread count.
+
+    Fix: intercept the 407, generate a fresh SSPI Negotiate token targeted at the proxy,
+    reconnect the TCP socket (closed by stdlib after 407), and retry CONNECT with the
+    Proxy-Authorization: Negotiate <token> header.
+
+    Thread-safe: sspi.ClientAuth is created per call (local variable).
+    Idempotent:  installs the patch only once (guarded by _kerberos_patched flag).
+    """
+    import http.client
+    import socket as _socket
+    import base64 as _b64
+
+    if getattr(http.client.HTTPConnection, '_kerberos_patched', False):
+        return  # Already installed
+
+    _orig_tunnel = http.client.HTTPConnection._tunnel
+
+    def _sspi_tunnel(self):
+        # First attempt without explicit proxy auth
+        try:
+            return _orig_tunnel(self)
+        except OSError as e:
+            if '407' not in str(e):
+                raise
+            # 407 Proxy Authentication Required — retry with SSPI Negotiate
+
+        try:
+            import sspi as _sspi
+        except ImportError:
+            raise OSError(
+                'Tunnel connection failed: 407 Proxy Authentication Required\n'
+                '  pywin32 (sspi) nicht verfügbar. Installiere: pip install pywin32'
+            )
+
+        # Generate SSPI Negotiate token; self.host is the PROXY when using ProxyManager
+        try:
+            clientauth = _sspi.ClientAuth('Negotiate', targetspn=f'HTTP/{self.host}')
+            err, out_buf = clientauth.authorize(None)
+            token = _b64.b64encode(out_buf[0].Buffer).decode()
+        except Exception as ex:
+            raise OSError(
+                f'Tunnel connection failed: 407 Proxy Authentication Required\n'
+                f'  SSPI-Token-Generierung fehlgeschlagen: {ex}'
+            )
+
+        # stdlib closed the socket after the 407 — re-establish the TCP connection to proxy
+        try:
+            timeout = self.timeout if self.timeout is not None else _socket.getdefaulttimeout()
+            src = getattr(self, 'source_address', None)
+            self.sock = _socket.create_connection((self.host, self.port), timeout, src)
+        except Exception as ex:
+            raise OSError(
+                f'Tunnel connection failed: 407 Proxy Authentication Required\n'
+                f'  Wiederverbindung zum Proxy fehlgeschlagen: {ex}'
+            )
+
+        # Retry the CONNECT with the Negotiate token
+        saved_headers = dict(self._tunnel_headers)
+        self._tunnel_headers['Proxy-Authorization'] = f'Negotiate {token}'
+        try:
+            return _orig_tunnel(self)
+        finally:
+            self._tunnel_headers.clear()
+            self._tunnel_headers.update(saved_headers)
+
+    http.client.HTTPConnection._tunnel = _sspi_tunnel
+    http.client.HTTPConnection._kerberos_patched = True
+    logger.info(
+        '  ℹ SSPI-Tunnel-Patch aktiv: CONNECT 407 → Kerberos Negotiate '
+        '(urllib3-Kompatibilität für ältere GDAL/QGIS-Umgebungen)'
+    )
+
+
 def _probe_proxy(proxy_url: str, test_url: str, timeout: int) -> dict:
     """
     Test a proxy URL without authentication.
@@ -377,6 +459,7 @@ def detect_proxy_requirement() -> Dict:
                     r = session.get(test_url, timeout=timeout)
                     if r.status_code == 200:
                         logger.info(f"  ✓ System-Proxy OK (Kerberos/{method}): {proxy_url}")
+                        _install_kerberos_tunnel_patch()
                         return _ok(f"system:{proxy_url} (kerberos/{method})",
                                    proxies_dict, False, session,
                                    auth_method=f"kerberos/{method}")
@@ -456,6 +539,7 @@ def detect_proxy_requirement() -> Dict:
                 logger.info(
                     f"  ✓ Proxy '{proxy_name}' OK (Kerberos/{kprobe['method']})"
                 )
+                _install_kerberos_tunnel_patch()
                 return _ok(
                     f"{proxy_name} (kerberos/{kprobe['method']})",
                     {"http": proxy_url, "https": proxy_url},

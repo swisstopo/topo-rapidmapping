@@ -352,6 +352,10 @@ def _rotate_to_north_up(jpg_path: Path, angle_deg: float, quality: int = 85) -> 
         result = subprocess.run(
             [
                 'gdalwarp',
+                '--config', 'NUM_THREADS', 'ALL_CPUS',
+                '--config', 'GDAL_CACHEMAX', '512',
+                '-multi',
+                '-wm', '512',
                 '-of', 'JPEG',
                 '-co', f'QUALITY={quality}',
                 '-r', 'bilinear',
@@ -950,6 +954,10 @@ def convert_tif_to_jpg_with_exif(
             warp_result = subprocess.run(
                 [
                     'gdalwarp',
+                    '--config', 'NUM_THREADS', 'ALL_CPUS',
+                    '--config', 'GDAL_CACHEMAX', '512',
+                    '-multi',
+                    '-wm', '512',
                     '-of', 'JPEG',
                     '-co', f'QUALITY={quality}',
                     '-r', 'bilinear',
@@ -1000,6 +1008,8 @@ def convert_tif_to_jpg_with_exif(
         translate_result = subprocess.run(
             [
                 'gdal_translate',
+                '--config', 'NUM_THREADS', 'ALL_CPUS',
+                '--config', 'GDAL_CACHEMAX', '512',
                 '-of', 'JPEG',
                 '-co', f'QUALITY={quality}',
                 '-co', 'EXIF_THUMBNAIL=NO',
@@ -1428,6 +1438,8 @@ def resize_image_gdal(
             translate_result = subprocess.run(
                 [
                     'gdal_translate',
+                    '--config', 'NUM_THREADS', 'ALL_CPUS',
+                    '--config', 'GDAL_CACHEMAX', '512',
                     '-of', 'JPEG',
                     '-outsize', str(new_width), str(new_height),
                     str(input_file),
@@ -1878,27 +1890,10 @@ def process_individual_photos(
                     'lat': None, 'lon': None,
                 }
 
-        # Kerberos/SSPI-Proxy: urllib3's CONNECT-Tunnel-Handling raises OSError on 407
-        # before HttpNegotiateAuth can negotiate — happens in every worker thread,
-        # regardless of thread-local sessions. Force sequential mode so SSPI always
-        # runs on a single thread where the auth context is fully established.
-        if not debug:
-            try:
-                from utilities.proxy_handler import PROXY_CONFIG as _kpc
-                if _kpc.get('auth_method') and 'kerberos' in _kpc.get('auth_method', ''):
-                    logger.info(
-                        "  ℹ Kerberos-Proxy erkannt → sequentielle Verarbeitung erzwungen\n"
-                        "    (SSPI-Auth-Kontexte sind thread-gebunden; "
-                        "parallele Worker würden 407-Fehler verursachen)"
-                    )
-                    debug = True
-            except Exception:
-                pass
-
         # --- Ausführung: sequentiell (debug) oder parallel ---
         logger.info("\n" + "=" * 70)
         if debug:
-            logger.info("VERARBEITE PHOTOS — SEQUENTIELL (Kerberos-Proxy oder Debug-Modus)")
+            logger.info("VERARBEITE PHOTOS — DEBUG-MODUS (sequentiell)")
         else:
             n_proc = min(8, max(2, total))
             logger.info(f"VERARBEITE PHOTOS — PARALLEL ({n_proc} Workers)")

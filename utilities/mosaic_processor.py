@@ -152,6 +152,8 @@ def create_thumbnail_from_cog(
         result = subprocess.run(
             [
                 'gdal_translate',
+                '--config', 'NUM_THREADS', 'ALL_CPUS',
+                '--config', 'GDAL_CACHEMAX', '512',
                 '-of', 'JPEG',
                 '-outsize', outsize_params[0], outsize_params[1],
             ] + _progress_flag + [

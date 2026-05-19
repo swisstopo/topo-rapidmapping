@@ -136,6 +136,14 @@ def _ensure_ms_suffix(timestamp: str) -> str:
 
 _GDAL_PROGRESS_SUPPORTED: dict = {}  # cache per executable, e.g. {'gdal_translate': True}
 
+# Performance flags injected into every GDAL command that processes pixels.
+# --config NUM_THREADS ALL_CPUS  → multi-thread COG tile/overview generation
+# --config GDAL_CACHEMAX 512     → 512 MB block cache (avoids repeated disk reads)
+_GDAL_PERF = [
+    "--config", "NUM_THREADS", "ALL_CPUS",
+    "--config", "GDAL_CACHEMAX", "512",
+]
+
 
 def _supports_progress(exe: str) -> bool:
     """Probe once whether this GDAL build accepts -progress for the given tool."""
@@ -202,6 +210,9 @@ def _run_gdal(label: str, cmd: list, output_path: "Path | None" = None) -> bool:
     import os
 
     logger.info(f"  → {label}")
+
+    # Inject performance flags right after the executable name
+    cmd = [cmd[0]] + _GDAL_PERF + cmd[1:]
 
     if _supports_progress(cmd[0]):
         full_cmd = cmd + ["-progress"]
@@ -430,7 +441,9 @@ def process_dmc4_workflow(
                 files = sorted(str(f) for f in src_dir.glob("*.tif"))
                 logger.info(f"  → VRT Mosaic {label} ({len(files)} Streifen) ...")
                 r = _sp.run(
-                    ["gdalbuildvrt", "-srcnodata", "0 0 0", str(vrt)] + files,
+                    ["gdalbuildvrt",
+                     "--config", "GDAL_CACHEMAX", "512",
+                     "-srcnodata", "0 0 0", str(vrt)] + files,
                     stderr=_sp.PIPE, text=True
                 )
                 if r.returncode != 0:

@@ -44,7 +44,7 @@ from utilities.mosaic_processor import process_single_cog_file
 from utilities.photo_processor import process_individual_photos, generate_csv_from_stac
 from utilities.kml_generator import create_overview_kml
 from utilities.stac_publisher import publish_to_stac_wrapper
-from utilities.proxy_handler import initialize_proxy
+from utilities.proxy_handler import initialize_proxy, get_configured_proxy_names
 from utilities.credentials import load_stac_credentials
 # publish_to_stac importiert lazy (verhindert circular import)
 
@@ -58,6 +58,46 @@ def print_banner():
     print(" " * 18 + "(POC - not for operational use)")
     print("=" * 70)
     print()
+
+
+def prompt_proxy_mode() -> tuple:
+    """
+    Interaktive Auswahl des Netzwerk-/Proxy-Modus.
+    Gibt (mode, proxy_name) zurück:
+      ('auto',   None)         — Autodetect (Standard)
+      ('direct', None)         — Kein Proxy, direkte Verbindung
+      ('system', None)         — Bundesnetz (System-Proxy)
+      ('named',  '<Name>')     — definierter Proxy aus proxy_config.json
+    """
+    named_proxies = get_configured_proxy_names()
+
+    print("\nNetzwerk / Proxy:")
+    print("  1) Autodetect  (direkt -> System-Proxy -> proxy_config.json)")
+    print("  2) Kein Proxy  (direkte Verbindung, kein Proxy)")
+    print("  3) Bundesnetz  (System-Proxy aus Windows-Einstellungen)")
+    for i, name in enumerate(named_proxies, 4):
+        print(f"  {i}) {name}")
+    print("  [Standard: 1]")
+
+    choices_map = {'1': ('auto', None), '2': ('direct', None), '3': ('system', None)}
+    for i, name in enumerate(named_proxies, 4):
+        choices_map[str(i)] = ('named', name)
+
+    while True:
+        raw = input("-> ").strip()
+        if raw == '':
+            raw = '1'
+        if raw in choices_map:
+            mode, proxy_name = choices_map[raw]
+            label = {
+                'auto':   'Autodetect',
+                'direct': 'Kein Proxy (direkte Verbindung)',
+                'system': 'Bundesnetz (System-Proxy)',
+                'named':  f"Proxy '{proxy_name}'",
+            }[mode]
+            logger.info(f"✓ Netzwerk-Modus: {label}")
+            return mode, proxy_name
+        print(f"  Ungültige Eingabe. Bitte 1–{len(choices_map)} eingeben.")
 
 
 def prompt_input_directory():
@@ -719,6 +759,9 @@ def main():
     python rapidmapping_processor.py --product ebo --input /data/rm --timestamp 2025-03-12 --upload=False
     python rapidmapping_processor.py --product qdop-nrg --input /data --timestamp 2024-07-15t14300000 --prod
     python rapidmapping_processor.py --product ebn --input /data --timestamp 2025-09-03 --debug
+    python rapidmapping_processor.py --proxy direct --product ebn --input /data --timestamp 2025-09-03
+    python rapidmapping_processor.py --proxy system --product ebn --input /data --timestamp 2025-09-03
+    python rapidmapping_processor.py --proxy BVCOL  --product ebn --input /data --timestamp 2025-09-03
         """
     )
     # Basic options
@@ -741,6 +784,13 @@ def main():
                         help=('Zeitstempel/Datum. '
                               'QDOP/EBN/EBO: YYYY-MM-DDthhmmss[cc]  '
                               'EBN/EBO Datum: YYYY-MM-DD'))
+    parser.add_argument('--proxy', dest='proxy', default=None,
+                        metavar='MODUS',
+                        help=('Netzwerk-Modus: '
+                              '"auto" (Standard: direkt -> System-Proxy -> proxy_config.json), '
+                              '"direct" (kein Proxy, direkte Verbindung), '
+                              '"system" (nur System-Proxy/Bundesnetz), '
+                              'oder Proxy-Name aus proxy_config.json (z.B. "BVCOL")'))
 
     args = parser.parse_args()
     environment = "PROD" if args.prod else "INT"
@@ -762,7 +812,23 @@ def main():
             logger.info("=" * 70)
             logger.info("PROXY / NETZWERK")
             logger.info("=" * 70)
-            initialize_proxy()
+
+            # Resolve proxy mode: CLI arg takes priority, else interactive prompt
+            if args.proxy is not None:
+                _proxy_arg = args.proxy.strip()
+                if _proxy_arg.lower() == 'auto':
+                    _proxy_mode, _proxy_name = 'auto', None
+                elif _proxy_arg.lower() in ('direct', 'kein'):
+                    _proxy_mode, _proxy_name = 'direct', None
+                elif _proxy_arg.lower() == 'system':
+                    _proxy_mode, _proxy_name = 'system', None
+                else:
+                    _proxy_mode, _proxy_name = 'named', _proxy_arg
+                logger.info(f"✓ Netzwerk-Modus (CLI): {args.proxy}")
+            else:
+                _proxy_mode, _proxy_name = prompt_proxy_mode()
+
+            initialize_proxy(mode=_proxy_mode, proxy_name=_proxy_name)
         else:
             hostname = None
 

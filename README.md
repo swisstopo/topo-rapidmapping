@@ -147,19 +147,44 @@ export STAC_PASSWORD=your_password
 
 Das Tool testet beim Start die Netzwerkverbindung in einer festen Reihenfolge. In den meisten Fällen ist kein manueller Eingriff nötig.
 
-#### Automatische Erkennung (Reihenfolge)
+#### Netzwerk-Modus wählen
 
-**Schritt 1: Direkte Verbindung (kein Proxy)**
-Das Tool versucht zuerst eine direkte Verbindung ohne Proxy. Das funktioniert z.B. wenn ein VPN-Client das Routing transparent übernimmt.
+Beim Start erscheint eine Auswahl:
 
-**Schritt 2: System-Proxy**
-Schlägt Schritt 1 fehl, liest das Tool den Proxy automatisch aus den Windows-Systemeinstellungen (Systemsteuerung > Internetoptionen > Verbindungen > LAN-Einstellungen) sowie aus den Umgebungsvariablen `HTTP_PROXY` und `HTTPS_PROXY`. Keine Konfigurationsdatei erforderlich.
+```
+Netzwerk / Proxy:
+  1) Autodetect  (direkt -> System-Proxy -> proxy_config.json)
+  2) Kein Proxy  (direkte Verbindung, kein Proxy)
+  3) Bundesnetz  (System-Proxy aus Windows-Einstellungen)
+  4) BVCOL
+```
 
-- Wenn der System-Proxy Kerberos/Negotiate-Authentifizierung verlangt (typisch in AD-Umgebungen): Die Authentifizierung erfolgt automatisch mit den Windows-Anmeldedaten des eingeloggten Benutzers. Voraussetzung: `pip install pyspnego`.
-- Wenn der System-Proxy keine Authentifizierung verlangt: wird direkt verwendet.
+**Option 1 — Autodetect (Standard)**
+Testet in dieser Reihenfolge:
 
-**Schritt 3: Proxies aus `secrets/proxy_config.json`**
-Nur wenn Schritt 1 und 2 fehlschlagen. Nützlich wenn der System-Proxy in Windows nicht konfiguriert ist, die Proxy-URL aber bekannt ist.
+1. Direkte Verbindung ohne Proxy. Funktioniert z.B. wenn ein VPN-Client das Routing transparent übernimmt. SSL-Verifikation aktiv.
+2. System-Proxy: liest die Proxy-URL aus Windows-Systemeinstellungen (Systemsteuerung > Internetoptionen > Verbindungen > LAN-Einstellungen) und aus den Umgebungsvariablen `HTTP_PROXY` / `HTTPS_PROXY`. SSL-Verifikation wird automatisch ermittelt (VPN-Detection).
+3. Proxies aus `secrets/proxy_config.json` — als letzter Fallback. SSL-Verifikation wird automatisch ermittelt.
+
+**Option 2 — Kein Proxy**
+Verbindet direkt ohne Proxy. SSL-Verifikation ist immer aktiv (kein Proxy bedeutet keine SSL-Inspection). Schlägt fehl wenn das Netz einen Proxy voraussetzt.
+
+**Option 3 — Bundesnetz**
+Verwendet nur den System-Proxy (Windows-Einstellungen / Umgebungsvariablen), ohne vorher eine direkte Verbindung zu versuchen. SSL-Verifikation wird automatisch ermittelt (VPN-Detection). Sinnvoll wenn bekannt ist, dass man im Bundesnetz mit Proxy arbeitet.
+
+**Option 4 und höher — definierter Proxy**
+Verwendet einen bestimmten Proxy aus `secrets/proxy_config.json`, identifiziert über den `name`-Eintrag (z.B. `BVCOL`). Alle anderen Verbindungswege werden übersprungen. SSL-Verifikation wird automatisch ermittelt (VPN-Detection).
+
+Via CLI-Parameter lässt sich der Modus direkt setzen (kein Dialog):
+```bash
+--proxy auto      # Autodetect (Standard)
+--proxy direct    # Kein Proxy (direkte Verbindung)
+--proxy system    # Bundesnetz (System-Proxy)
+--proxy BVCOL     # definierter Proxy mit Name "BVCOL"
+```
+
+**Kerberos-Authentifizierung**
+Wenn ein Proxy Windows-Kerberos verlangt (typisch in AD-Umgebungen), erfolgt die Authentifizierung automatisch mit den Anmeldedaten des eingeloggten Windows-Benutzers. Voraussetzung: `pip install pyspnego`.
 
 #### VPN und SSL-Inspektion
 
@@ -188,9 +213,7 @@ cp proxy_config.examples secrets/proxy_config.json
 }
 ```
 
-#### Kerberos / Corporate Proxy (z.B. Bundesverwaltung)
-
-Wenn der Proxy Windows-Kerberos-Authentifizierung verlangt (typisch in AD-Umgebungen):
+#### Kerberos / Corporate Proxy
 
 ```bash
 pip install pyspnego        # empfohlen (modern, aktiv gepflegt, kein pywin32 nötig)
@@ -198,7 +221,7 @@ pip install pyspnego        # empfohlen (modern, aktiv gepflegt, kein pywin32 n�
 pip install requests-negotiate-sspi
 ```
 
-Voraussetzungen: Windows, am Active-Directory-Domain angemeldet. Danach läuft alles automatisch — keine weitere Konfiguration nötig.
+Voraussetzung: Windows, am Active-Directory-Domain angemeldet.
 
 ## Verwendung
 
@@ -781,6 +804,11 @@ python rapidmapping_processor.py --product ebn --input /data --timestamp 2025-09
 
 # QDOP-DMC4 (4-Kanal Bildstreifen → erzeugt RGB + NRG)
 python rapidmapping_processor.py --product qdop-dmc4 --input /data/dmc4 --timestamp 2024-07-15t143000
+
+# Netzwerk-Modus explizit setzen
+python rapidmapping_processor.py --proxy direct --product ebn --input /data --timestamp 2025-09-03
+python rapidmapping_processor.py --proxy system --product ebn --input /data --timestamp 2025-09-03
+python rapidmapping_processor.py --proxy BVCOL  --product ebn --input /data --timestamp 2025-09-03
 ```
 
 ### Parameter-Übersicht
@@ -790,6 +818,7 @@ python rapidmapping_processor.py --product qdop-dmc4 --input /data/dmc4 --timest
 | `--product` | `ebn`, `ebo`, `qdop-rgb`, `qdop-nrg`, `qdop-dmc4` | Produkttyp |
 | `--input` | Pfad | Quellverzeichnis mit Eingabedaten |
 | `--timestamp` | `YYYY-MM-DD` oder `YYYY-MM-DDthhmmss[cc]` | Datum/Zeitstempel |
+| `--proxy` | `auto`, `direct`, `system`, Proxy-Name | Netzwerk-Modus (default: `auto`) |
 | `--upload` | `True` / `False` | Upload zu STAC (False → ./output/) |
 | `--prod` | Flag | Produktionsumgebung (default: INT) |
 | `--debug` | Flag | Sequentiell + volles Logging |

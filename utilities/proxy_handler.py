@@ -584,8 +584,9 @@ def detect_proxy_requirement(
             raise ValueError(f"Proxy '{proxy_name}' hat keine URL in {PROXY_CONFIG_PATH}.")
 
         logger.info(f"  [1] Definierter Proxy '{proxy_name}': {proxy_url}")
-        _connect_named_proxy(proxy_name, proxy_url, test_url, timeout, _ok)
-        # _connect_named_proxy raises on failure; if it returns, something went wrong
+        result = _connect_named_proxy(proxy_name, proxy_url, test_url, timeout, _ok)
+        if result is not None:
+            return result
         raise ConnectionError(f"Proxy '{proxy_name}' nicht erreichbar. Test-URL: {test_url}")
 
     # ── Konfigurierte Proxies aus proxy_config.json (Modus 'auto', Schritt 3) ─

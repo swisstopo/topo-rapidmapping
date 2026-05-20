@@ -813,7 +813,11 @@ def main():
             logger.info("PROXY / NETZWERK")
             logger.info("=" * 70)
 
-            # Resolve proxy mode: CLI arg takes priority, else interactive prompt
+            # Resolve proxy mode:
+            #   --proxy <value>  → use that value directly
+            #   no --proxy, fully CLI (product+input+timestamp all set) → auto
+            #   no --proxy, interactive mode → show prompt
+            _is_full_cli = args.product and args.input_dir and args.timestamp
             if args.proxy is not None:
                 _proxy_arg = args.proxy.strip()
                 if _proxy_arg.lower() == 'auto':
@@ -825,6 +829,9 @@ def main():
                 else:
                     _proxy_mode, _proxy_name = 'named', _proxy_arg
                 logger.info(f"✓ Netzwerk-Modus (CLI): {args.proxy}")
+            elif _is_full_cli:
+                _proxy_mode, _proxy_name = 'auto', None
+                logger.info("✓ Netzwerk-Modus: Autodetect (Standard)")
             else:
                 _proxy_mode, _proxy_name = prompt_proxy_mode()
 

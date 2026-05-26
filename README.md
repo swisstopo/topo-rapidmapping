@@ -175,9 +175,9 @@ Verwendet nur den System-Proxy (Windows-Einstellungen / Umgebungsvariablen), ohn
 **Option 4 und höher — definierter Proxy**
 Verwendet einen bestimmten Proxy aus `secrets/proxy_config.json`, identifiziert über den `name`-Eintrag (z.B. `BVCOL`). Alle anderen Verbindungswege werden übersprungen. SSL-Verifikation wird automatisch ermittelt (VPN-Detection).
 
-Via CLI-Parameter lässt sich der Modus direkt setzen (kein Dialog):
+Via CLI-Parameter lässt sich der Modus direkt setzen (kein Dialog). Wenn alle drei Parameter `--product`, `--input` und `--timestamp` angegeben sind und `--proxy` fehlt, wird automatisch `auto` verwendet:
 ```bash
---proxy auto      # Autodetect (Standard)
+--proxy auto      # Autodetect (Standard, auch impliziter Default im CLI-Modus)
 --proxy direct    # Kein Proxy (direkte Verbindung)
 --proxy system    # Bundesnetz (System-Proxy)
 --proxy BVCOL     # definierter Proxy mit Name "BVCOL"
@@ -818,7 +818,7 @@ python rapidmapping_processor.py --proxy BVCOL  --product ebn --input /data --ti
 | `--product` | `ebn`, `ebo`, `qdop-rgb`, `qdop-nrg`, `qdop-dmc4` | Produkttyp |
 | `--input` | Pfad | Quellverzeichnis mit Eingabedaten |
 | `--timestamp` | `YYYY-MM-DD` oder `YYYY-MM-DDthhmmss[cc]` | Datum/Zeitstempel |
-| `--proxy` | `auto`, `direct`, `system`, Proxy-Name | Netzwerk-Modus (default: `auto`) |
+| `--proxy` | `auto`, `direct`, `system`, Proxy-Name | Netzwerk-Modus. Wenn weggelassen: `auto` im CLI-Modus, interaktive Auswahl im Dialog-Modus |
 | `--upload` | `True` / `False` | Upload zu STAC (False → ./output/) |
 | `--prod` | Flag | Produktionsumgebung (default: INT) |
 | `--debug` | Flag | Sequentiell + volles Logging |

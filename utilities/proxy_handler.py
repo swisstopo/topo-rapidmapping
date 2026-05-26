@@ -549,6 +549,7 @@ def detect_proxy_requirement(
                         f"  ✓ System-Proxy OK (ohne Auth): {proxy_url}"
                         + (" (VPN/SSL-Inspection erkannt)" if not verify else "")
                     )
+                    _install_kerberos_tunnel_patch()
                     return _ok(f"system:{proxy_url}", proxies_dict, verify, s, not verify)
 
                 if probe['status'] == 'needs_kerberos':
@@ -644,6 +645,11 @@ def _connect_named_proxy(proxy_name, proxy_url, test_url, timeout, _ok):
             + (" (VPN erkannt, SSL deaktiviert)" if is_vpn else
                " (SSL aktiv)" if use_ssl else " (SSL deaktiviert)")
         )
+        # Always install the Kerberos tunnel patch when using a proxy.
+        # Some proxies accept the test URL without auth but require Kerberos
+        # Negotiate on CONNECT tunnels to other destinations. The patch is
+        # idempotent and falls back to unauthenticated if SSPI is unavailable.
+        _install_kerberos_tunnel_patch()
         return _ok(proxy_name, {"http": proxy_url, "https": proxy_url}, use_ssl, s, is_vpn)
 
     if probe['status'] == 'needs_kerberos':

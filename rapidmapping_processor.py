@@ -100,9 +100,25 @@ def prompt_proxy_mode() -> tuple:
         print(f"  Ungültige Eingabe. Bitte 1–{len(choices_map)} eingeben.")
 
 
+def prompt_environment() -> str:
+    print("\n Bitte Umgebung auswählen:")
+    print("   1) INT  - Integrationsumgebung (default)")
+    print("   2) PROD - Produktionsumgebung")
+    while True:
+        choice = input("-> ").strip()
+        if choice in ("", "1"):
+            logger.info("✓ Umgebung: INT")
+            return "INT"
+        elif choice == "2":
+            logger.info("✓ Umgebung: PROD")
+            return "PROD"
+        else:
+            logger.error("✗ Ungültige Auswahl. Bitte 1 oder 2 eingeben (oder Enter für INT).")
+
+
 def prompt_input_directory():
     while True:
-        print("\n📁 Bitte Input-Verzeichnis angeben:")
+        print("\n Bitte Input-Verzeichnis angeben:")
         print("   Beispiel Windows: C:\\oed\\temp\\rm\\input")
         print("   Beispiel Linux:   /home/user/rm/input")
         input_dir = input("-> ").strip()
@@ -116,7 +132,7 @@ def prompt_input_directory():
 
 
 def prompt_product_type():
-    print("\n📦 Bitte Produkttyp auswählen:")
+    print("\n Bitte Produkttyp auswählen:")
     print("   1) QDOP RGB Mosaic (Orthophoto RGB)")
     print("   2) QDOP NRG Mosaic (Orthophoto Nahinfrarot)")
     print("   3) EBN - Einzelbilder Nadir (Senkrecht)")
@@ -141,7 +157,7 @@ def prompt_product_type():
 
 def prompt_timestamp(product_type):
     if product_type in [ProductType.EBN, ProductType.EBO]:
-        print("\n🕐 Bitte Aufnahmedatum angeben:")
+        print("\n Bitte Aufnahmedatum angeben:")
         print("   Format: YYYY-MM-DD  Beispiel: 2024-07-15")
         while True:
             date_input = input("-> ").strip()
@@ -152,7 +168,7 @@ def prompt_timestamp(product_type):
             except ValueError:
                 logger.error("✗ Ungültiges Format. Bitte YYYY-MM-DD verwenden.")
     else:
-        print("\n🕐 Bitte Aufnahmezeitpunkt angeben:")
+        print("\n Bitte Aufnahmezeitpunkt angeben:")
         print("   Format: YYYY-MM-DDthhmmss  Beispiel: 2024-07-15t143000")
         while True:
             timestamp = input("-> ").strip().lower()
@@ -354,11 +370,10 @@ def process_mosaic_workflow(
                 environment=environment
             )
 
-            thumbnail_success = False
             if thumbnail_file.exists():
                 temp_thumb_path = upload_temp_dir / "thumbnail.jpg"
                 logger.info(f"\n-> Upload Thumbnail als: thumbnail.jpg")
-                thumbnail_success = publish_to_stac_wrapper(
+                publish_to_stac_wrapper(
                     asset_path=temp_thumb_path,
                     item_name=item_name,
                     collection=STAC_COLLECTION,
@@ -368,12 +383,11 @@ def process_mosaic_workflow(
                     environment=environment
                 )
 
-            if cog_success and thumbnail_success:
+            if cog_success:
                 cleanup_temp_directory(temp_dir)
                 logger.info("\n" + "=" * 70)
-                logger.info(f"Naechster Schritt fuer {config['description']}: URL fuer rapidmapping.ch")
-                logger.info(f"1) URL oeffnen: https://map.geo.admin.ch/#/map?layers=COG|{STAC_SCHEME}://{hostname}/{STAC_COLLECTION}/{item_name}/{asset_name_base}")
-                logger.info(f"2) Kartenausschnitt: als iFrame in rapidmapping.ch integrieren")
+                logger.info(f"✅ Nächster Schritt: {config['description']}")
+                logger.info(f"  URL: https://map.geo.admin.ch/#/map?layers=COG|{STAC_SCHEME}://{hostname}/{STAC_COLLECTION}/{item_name}/{asset_name_base}")
                 logger.info("=" * 70)
 
             return cog_success
@@ -698,11 +712,11 @@ def process_photos_workflow(
                     f"/{kml_item_name}/{csv_asset_name}"
                 )
                 # Links immer ausgeben — auch im non-debug Modus
-                print("\n" + "=" * 70)
-                print(f"✅ Nächster Schritt: {config['description']}")
-                print(f"🗺  Karte:  https://map.geo.admin.ch/#/map?layers=KML|{STAC_SCHEME}://{hostname}/{STAC_COLLECTION}/{kml_item_name}/{kml_asset_name}")
-                print(f"📥 Liste:  {csv_stac_url}")
-                print("=" * 70)
+                logger.info("\n" + "=" * 70)
+                logger.info(f"✅ Nächster Schritt: {config['description']}")
+                logger.info(f"  Karte:  https://map.geo.admin.ch/#/map?layers=KML|{STAC_SCHEME}://{hostname}/{STAC_COLLECTION}/{kml_item_name}/{kml_asset_name}")
+                logger.info(f"  Liste:  {csv_stac_url}")
+                logger.info("=" * 70)
 
         return result['successful_uploads'] > 0
 
@@ -793,7 +807,7 @@ def main():
                               'oder Proxy-Name aus proxy_config.json (z.B. "BVCOL")'))
 
     args = parser.parse_args()
-    environment = "PROD" if args.prod else "INT"
+    _is_full_cli = bool(args.product and args.input_dir and args.timestamp)
 
     # C) Resolve debug flag: CLI > DEBUG_MODE_DEFAULT
     if args.debug is None:
@@ -801,6 +815,14 @@ def main():
 
     try:
         print_banner()
+
+        # First interactive question: environment (INT/PROD)
+        if args.prod:
+            environment = "PROD"
+        elif not _is_full_cli:
+            environment = prompt_environment()
+        else:
+            environment = "INT"
 
         if args.upload:
             logger.info("=" * 70)
@@ -817,7 +839,6 @@ def main():
             #   --proxy <value>  → use that value directly
             #   no --proxy, fully CLI (product+input+timestamp all set) → auto
             #   no --proxy, interactive mode → show prompt
-            _is_full_cli = args.product and args.input_dir and args.timestamp
             if args.proxy is not None:
                 _proxy_arg = args.proxy.strip()
                 if _proxy_arg.lower() == 'auto':
@@ -968,7 +989,7 @@ def main():
         return 0 if success else 1
 
     except KeyboardInterrupt:
-        logger.warning("\n⚠ Abbruch (Ctrl+C)")
+        logger.warning("\nAbbruch (Ctrl+C)")
         return 130
     except Exception as e:
         logger.error(f"✗ Fehler: {str(e)}")

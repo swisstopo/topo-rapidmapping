@@ -146,7 +146,7 @@ def publish_to_stac_wrapper(
         
     except Exception as e:
         logger.error(f"✗ Fehler in STAC-Publikation: {e}")
-        logger.error("  Stacktrace für Debugging:")
+        logger.error(" Stacktrace für Debugging:")
         import traceback
         logger.error(traceback.format_exc())
         return False
@@ -191,7 +191,7 @@ def verify_stac_item_exists(
         return exists
         
     except Exception as e:
-        logger.warning(f"  ⚠ Konnte Existenz nicht prüfen: {e}")
+        logger.warning(f" ! Konnte Existenz nicht prüfen: {e}")
         return False
 
 
@@ -262,7 +262,7 @@ def batch_publish_assets(
     logger.debug("\n" + "=" * 70)
     logger.debug(f"Batch-Upload abgeschlossen: {successful}/{total} erfolgreich")
     if failed > 0:
-        logger.warning(f"  ⚠ {failed} fehlgeschlagen")
+        logger.warning(f" ! {failed} fehlgeschlagen")
     logger.debug("=" * 70)
     
     return results

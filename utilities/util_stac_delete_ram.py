@@ -40,7 +40,7 @@ try:
     PROXY_AVAILABLE = True
 except ImportError:
     PROXY_AVAILABLE = False
-    print("⚠ Warning: Proxy handler not available. Will use direct connection.")
+    print("! Warning: Proxy handler not available. Will use direct connection.")
 
 
 def load_credentials_from_file(config_path: str) -> tuple:
@@ -321,11 +321,11 @@ def main():
         base_url = "https://data.geo.admin.ch/api/stac/v0.9/"
         hostname = "data.geo.admin.ch"
     else:
-        print("❌ Invalid choice. Exiting.")
+        print("[FEHLER] Invalid choice. Exiting.")
         sys.exit(1)
     
     print(f"\n✓ Selected environment: {environment}")
-    print(f"  URL: {base_url}")
+    print(f" URL: {base_url}")
     
     # ========================================================================
     # STEP 2: Initialize Proxy (if available)
@@ -337,8 +337,8 @@ def main():
         try:
             initialize_proxy()
         except Exception as e:
-            print(f"⚠ Proxy initialization failed: {e}")
-            print("  Continuing without proxy...")
+            print(f"! Proxy initialization failed: {e}")
+            print(" Continuing without proxy...")
     
     # ========================================================================
     # STEP 3: Load Credentials
@@ -362,7 +362,7 @@ def main():
         auth = (username, password)
         print(f"✓ Credentials loaded for {environment}")
     except Exception as e:
-        print(f"❌ Error loading credentials: {e}")
+        print(f"[FEHLER] Error loading credentials: {e}")
         sys.exit(1)
     
     # ========================================================================
@@ -390,7 +390,7 @@ def main():
         date_filter = input("\nEnter date (YYYY-MM-DD, e.g., 2024-07-15): ").strip()
         print(f"\n✓ Mode: Delete RAM items from date: {date_filter}")
     else:
-        print("❌ Invalid choice. Exiting.")
+        print("[FEHLER] Invalid choice. Exiting.")
         sys.exit(1)
     
     # ========================================================================
@@ -410,11 +410,11 @@ def main():
         print(f"✓ Filtered to {len(filtered_items)} RAM items")
         
         if not filtered_items:
-            print("\n⚠ No matching items found. Nothing to delete.")
+            print("\n! No matching items found. Nothing to delete.")
             sys.exit(0)
     
     except Exception as e:
-        print(f"❌ Error fetching items: {e}")
+        print(f"[FEHLER] Error fetching items: {e}")
         sys.exit(1)
     
     # ========================================================================
@@ -434,7 +434,7 @@ def main():
     # STEP 8: First Confirmation
     # ========================================================================
     print("\n" + "="*70)
-    print("⚠ WARNING: DELETION IS PERMANENT!")
+    print("! WARNING: DELETION IS PERMANENT!")
     print("="*70)
     print(f"Environment: {environment}")
     print(f"Collection: {collection_id}")
@@ -444,7 +444,7 @@ def main():
     
     confirm1 = input('\nType "yes" to continue: ').strip().lower()
     if confirm1 != "yes":
-        print("❌ Deletion cancelled.")
+        print("[FEHLER] Deletion cancelled.")
         sys.exit(0)
     
     # ========================================================================
@@ -457,14 +457,14 @@ def main():
     
     confirm2 = input('\nType "I agree" to proceed with deletion: ').strip()
     if confirm2 != "I agree":
-        print("❌ Deletion cancelled.")
+        print("[FEHLER] Deletion cancelled.")
         sys.exit(0)
     
     # ========================================================================
     # STEP 10: Execute Deletion
     # ========================================================================
     print("\n" + "="*70)
-    print("🗑️  STARTING DELETION")
+    print(" STARTING DELETION")
     print("="*70)
     
     try:
@@ -507,8 +507,8 @@ if __name__ == "__main__":
         results = main()
         print("\nDone.")
     except KeyboardInterrupt:
-        print("\n\n❌ Deletion cancelled by user (Ctrl+C)")
+        print("\n\n[FEHLER] Deletion cancelled by user (Ctrl+C)")
         sys.exit(1)
     except Exception as e:
-        print(f"\n❌ Fatal error: {e}")
+        print(f"\n[FEHLER] Fatal error: {e}")
         sys.exit(1)

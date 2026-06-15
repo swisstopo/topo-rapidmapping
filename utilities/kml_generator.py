@@ -39,8 +39,8 @@ def query_stac_items_by_date(
         session = get_session()
         search_endpoint = f"{stac_url.rstrip('/')}/search"
 
-        logger.info(f"  Connecting to STAC (Raw Requests): {search_endpoint}")
-        logger.info(f"  Searching items for date: {date}, Product: {product_suffix}")
+        logger.info(f" Connecting to STAC (Raw Requests): {search_endpoint}")
+        logger.info(f" Searching items for date: {date}, Product: {product_suffix}")
 
         payload = {
             "collections": [collection],
@@ -53,7 +53,7 @@ def query_stac_items_by_date(
 
         while True:
             page_count += 1
-            logger.info(f"  Fetching page {page_count}...")
+            logger.info(f" Fetching page {page_count}...")
 
             resp = session.post(search_endpoint, json=payload)
             resp.raise_for_status()
@@ -115,11 +115,11 @@ def query_stac_items_by_date(
                     break
 
             if not next_link:
-                logger.info(f"  No more pages (fetched {page_count} pages total)")
+                logger.info(f" No more pages (fetched {page_count} pages total)")
                 break
 
             if page_count > 1000:
-                logger.warning(f"  Reached safety limit of 1000 pages, stopping")
+                logger.warning(f" Reached safety limit of 1000 pages, stopping")
                 break
 
         logger.info(f"  ✓ {len(all_results)} Items found across {page_count} pages")
@@ -252,7 +252,7 @@ def create_overview_kml(
     items = query_stac_items_by_date(stac_url, collection, date, product_suffix)
 
     if not items:
-        logger.warning("  ⚠ No items found - KML not created")
+        logger.warning(" ! No items found - KML not created")
         return False
 
     return generate_kml_from_stac_items(items, output_file, product_config)

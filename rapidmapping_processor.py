@@ -76,8 +76,8 @@ def prompt_proxy_mode() -> tuple:
     print("  2) Kein Proxy  (direkte Verbindung, kein Proxy)")
     print("  3) Bundesnetz  (System-Proxy aus Windows-Einstellungen)")
     for i, name in enumerate(named_proxies, 4):
-        print(f"  {i}) {name}")
-    print("  [Standard: 1]")
+        print(f" {i}) {name}")
+    print(" [Standard: 1]")
 
     choices_map = {'1': ('auto', None), '2': ('direct', None), '3': ('system', None)}
     for i, name in enumerate(named_proxies, 4):
@@ -97,7 +97,7 @@ def prompt_proxy_mode() -> tuple:
             }[mode]
             logger.info(f"✓ Netzwerk-Modus: {label}")
             return mode, proxy_name
-        print(f"  Ungültige Eingabe. Bitte 1–{len(choices_map)} eingeben.")
+        print(f" Ungültige Eingabe. Bitte 1–{len(choices_map)} eingeben.")
 
 
 def prompt_environment() -> str:
@@ -386,8 +386,8 @@ def process_mosaic_workflow(
             if cog_success:
                 cleanup_temp_directory(temp_dir)
                 logger.info("\n" + "=" * 70)
-                logger.info(f"✅ Nächster Schritt: {config['description']}")
-                logger.info(f"  URL: https://map.geo.admin.ch/#/map?layers=COG|{STAC_SCHEME}://{hostname}/{STAC_COLLECTION}/{item_name}/{asset_name_base}")
+                logger.info(f" Nächster Schritt: {config['description']}")
+                logger.info(f" URL: https://map.geo.admin.ch/#/map?layers=COG|{STAC_SCHEME}://{hostname}/{STAC_COLLECTION}/{item_name}/{asset_name_base}")
                 logger.info("=" * 70)
 
             return cog_success
@@ -560,8 +560,8 @@ def process_dmc4_workflow(
             cleanup_temp_directory(output_dir)
             logger.info("\n" + "=" * 70)
             logger.info(f"Nächster Schritt: URL für rapidmapping.ch")
-            logger.info(f"  RGB: https://map.geo.admin.ch/#/map?layers=COG|{STAC_SCHEME}://{hostname}/{STAC_COLLECTION}/{item_name}/{asset_name_rgb}")
-            logger.info(f"  NRG: https://map.geo.admin.ch/#/map?layers=COG|{STAC_SCHEME}://{hostname}/{STAC_COLLECTION}/{item_name}/{asset_name_nrg}")
+            logger.info(f" RGB: https://map.geo.admin.ch/#/map?layers=COG|{STAC_SCHEME}://{hostname}/{STAC_COLLECTION}/{item_name}/{asset_name_rgb}")
+            logger.info(f" NRG: https://map.geo.admin.ch/#/map?layers=COG|{STAC_SCHEME}://{hostname}/{STAC_COLLECTION}/{item_name}/{asset_name_nrg}")
             logger.info("=" * 70)
 
         return ok_rgb and ok_nrg
@@ -713,9 +713,9 @@ def process_photos_workflow(
                 )
                 # Links immer ausgeben — auch im non-debug Modus
                 logger.info("\n" + "=" * 70)
-                logger.info(f"✅ Nächster Schritt: {config['description']}")
-                logger.info(f"  Karte:  https://map.geo.admin.ch/#/map?layers=KML|{STAC_SCHEME}://{hostname}/{STAC_COLLECTION}/{kml_item_name}/{kml_asset_name}")
-                logger.info(f"  Liste:  {csv_stac_url}")
+                logger.info(f" Nächster Schritt: {config['description']}")
+                logger.info(f" Karte:  https://map.geo.admin.ch/#/map?layers=KML|{STAC_SCHEME}://{hostname}/{STAC_COLLECTION}/{kml_item_name}/{kml_asset_name}")
+                logger.info(f" Liste:  {csv_stac_url}")
                 logger.info("=" * 70)
 
         return result['successful_uploads'] > 0
@@ -911,18 +911,18 @@ def main():
         print("\n" + "=" * 70)
         print("ZUSAMMENFASSUNG")
         print("=" * 70)
-        print(f"  Environment:    {environment}")
-        print(f"  Input-Verz.:    {input_dir}")
-        print(f"  Produkttyp:     {product_type.value}")
-        print(f"  Zeitstempel:    {timestamp_or_date}")
-        print(f"  STAC Upload:    {'Aktiviert' if args.upload else 'Deaktiviert (→ ./output/)'}")
-        print(f"  Debug-Modus:    {'AN (sequentiell)' if args.debug else 'AUS (parallel)'}")
+        print(f" Environment:    {environment}")
+        print(f" Input-Verz.:    {input_dir}")
+        print(f" Produkttyp:     {product_type.value}")
+        print(f" Zeitstempel:    {timestamp_or_date}")
+        print(f" STAC Upload:    {'Aktiviert' if args.upload else 'Deaktiviert (→ ./output/)'}")
+        print(f" Debug-Modus:    {'AN (sequentiell)' if args.debug else 'AUS (parallel)'}")
         if args.upload:
-            print(f"  STAC Hostname:  {hostname}")
+            print(f" STAC Hostname:  {hostname}")
         else:
             from pathlib import Path as _P
             _P("output").mkdir(exist_ok=True)
-            print(f"  Output-Verz.:   {_P('output').resolve()}")
+            print(f" Output-Verz.:   {_P('output').resolve()}")
         print("=" * 70)
 
         # Skip confirmation when all parameters supplied via CLI
@@ -983,7 +983,7 @@ def main():
             logger.info("✓ VERARBEITUNG ERFOLGREICH")
         else:
             logger.error("✗ VERARBEITUNG MIT FEHLERN")
-        print(f"  Log:  {Path(_log_filename).resolve()}")
+        print(f" Log:  {Path(_log_filename).resolve()}")
         print("=" * 70 + "\n")
 
         return 0 if success else 1

@@ -61,7 +61,7 @@ def check_is_cog(file_path: Path) -> bool:
         return is_tiled and has_overviews
         
     except Exception as e:
-        logger.warning(f"  ⚠ COG-Check Fehler: {e}")
+        logger.warning(f" ! COG-Check Fehler: {e}")
         return False
 
 
@@ -105,7 +105,7 @@ def check_is_8bit_rgb(file_path: Path) -> bool:
         return True
         
     except Exception as e:
-        logger.warning(f"  ⚠ 8-bit RGB Check Fehler: {e}")
+        logger.warning(f" ! 8-bit RGB Check Fehler: {e}")
         return False
 
 
@@ -119,7 +119,7 @@ def create_thumbnail_from_cog(
     Ensures neither width nor height exceeds max_size.
     """
     try:
-        logger.info(f"  Analysing dimensions for: {input_file.name}")
+        logger.info(f" Analysing dimensions for: {input_file.name}")
 
         # 1. Get image dimensions using gdalinfo -json
         info_proc = subprocess.run(
@@ -199,7 +199,7 @@ def process_single_cog_file(
         # Input-Dateien finden
         logger.info(f"Suche TIFF-Dateien in: {input_dir}")
         input_files = get_tif_files(input_dir, recursive=False)
-        logger.info(f"  Gefunden: {len(input_files)} TIFF-Datei(en)")
+        logger.info(f" Gefunden: {len(input_files)} TIFF-Datei(en)")
         
         # Prüfe: Genau 1 Datei?
         if len(input_files) == 0:
@@ -208,27 +208,27 @@ def process_single_cog_file(
         
         if len(input_files) > 1:
             logger.error(f"✗ Mehrere TIFF-Dateien gefunden ({len(input_files)})!")
-            logger.error("  Dieser Workflow erwartet genau 1 COG-Tiff Datei.")
-            logger.error("  Bitte Mosaik-Erstellung extern durchführen und nur COG bereitstellen.")
+            logger.error(" Dieser Workflow erwartet genau 1 COG-Tiff Datei.")
+            logger.error(" Bitte Mosaik-Erstellung extern durchführen und nur COG bereitstellen.")
             return None
         
         single_file = input_files[0]
         logger.info(f"\n✓ Genau 1 Datei gefunden: {single_file.name}")
         
         # Prüfe: Ist COG?
-        logger.info("  Prüfe ob COG...")
+        logger.info(" Prüfe ob COG...")
         if not check_is_cog(single_file):
             logger.error("  ✗ Datei ist KEIN Cloud Optimized GeoTIFF (COG)!")
-            logger.error("  Bitte konvertiere zu COG mit:")
+            logger.error(" Bitte konvertiere zu COG mit:")
             logger.error(f"    gdal_translate -of COG -co COMPRESS=JPEG -co QUALITY=75 {single_file.name} output.tif")
             return None
         logger.info("  ✓ Ist COG")
         
         # Prüfe: Ist 8-bit RGB (3 Bänder)?
-        logger.info("  Prüfe ob 8-bit RGB (3 Bänder)...")
+        logger.info(" Prüfe ob 8-bit RGB (3 Bänder)...")
         if not check_is_8bit_rgb(single_file):
             logger.error("  ✗ Datei ist NICHT 8-bit RGB mit 3 Bändern!")
-            logger.error("  Erforderlich: 3 Bänder, Datatype 'Byte' (8-bit)")
+            logger.error(" Erforderlich: 3 Bänder, Datatype 'Byte' (8-bit)")
             return None
         logger.info("  ✓ Ist 8-bit RGB (3 Bänder)")
         
@@ -237,8 +237,8 @@ def process_single_cog_file(
         output_file = output_dir / f"{filename}.tif"
         
         logger.info(f"\n✓ Datei ist COG-konform - kopiere...")
-        logger.info(f"  Von: {single_file}")
-        logger.info(f"  Nach: {output_file}")
+        logger.info(f" Von: {single_file}")
+        logger.info(f" Nach: {output_file}")
         
         shutil.copy2(single_file, output_file)
         
@@ -250,7 +250,7 @@ def process_single_cog_file(
         if create_thumbnail_from_cog(output_file, thumbnail_file, max_size=256):
             logger.info("  ✓ Thumbnail erstellt: thumbnail.jpg")
         else:
-            logger.warning("  ⚠ Thumbnail-Erstellung fehlgeschlagen (nicht kritisch)")
+            logger.warning(" ! Thumbnail-Erstellung fehlgeschlagen (nicht kritisch)")
         
         logger.info("\n✓ Single-File-Processing erfolgreich abgeschlossen")
         return output_file

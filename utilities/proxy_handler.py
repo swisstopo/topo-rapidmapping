@@ -91,7 +91,7 @@ def load_proxy_config() -> Dict:
         return config
         
     except Exception as e:
-        logger.warning(f"  ⚠ Fehler beim Laden der Proxy-Config: {e}")
+        logger.warning(f" ! Fehler beim Laden der Proxy-Config: {e}")
         logger.info(f"  ℹ Verwende Default-Konfiguration")
         return DEFAULT_PROXY_CONFIG
 
@@ -284,7 +284,7 @@ def _make_kerberos_session(
         pass
 
     logger.warning(
-        "  ⚠ Keine Kerberos-Bibliothek gefunden.\n"
+        " ! Keine Kerberos-Bibliothek gefunden.\n"
         "    Empfohlen (modern):  pip install pyspnego\n"
         "    Legacy-Fallback:     pip install requests-negotiate-sspi"
     )
@@ -340,7 +340,7 @@ def _install_kerberos_tunnel_patch():
         except ImportError:
             pass
         except Exception as _e:
-            logger.debug(f'  SSPI pyspnego token error: {type(_e).__name__}: {_e}')
+            logger.debug(f' SSPI pyspnego token error: {type(_e).__name__}: {_e}')
 
         # ── Option 2: pywin32.sspi (Legacy-Fallback) ──────────────────────────
         try:
@@ -351,9 +351,9 @@ def _install_kerberos_tunnel_patch():
         except ImportError:
             pass
         except Exception as _e:
-            logger.debug(f'  SSPI pywin32 token error: {type(_e).__name__}: {_e}')
+            logger.debug(f' SSPI pywin32 token error: {type(_e).__name__}: {_e}')
 
-        logger.debug('  SSPI: all token backends failed — falling back to unauthenticated CONNECT')
+        logger.debug(' SSPI: all token backends failed — falling back to unauthenticated CONNECT')
         return ''  # no token — caller falls back to unauthenticated
 
     def _sspi_tunnel(self):
@@ -451,8 +451,8 @@ def detect_proxy_requirement(
 
     mode:
       'auto'    Testet in Reihenfolge: direkt → System-Proxy → proxy_config.json
-      'direct'  Nur direkte Verbindung (kein Proxy); SSL-Verifikation aktiv
-      'system'  Nur System-Proxy (Windows-Einstellungen / Umgebungsvariablen)
+      'direct' Nur direkte Verbindung (kein Proxy); SSL-Verifikation aktiv
+      'system' Nur System-Proxy (Windows-Einstellungen / Umgebungsvariablen)
       'named'   Nur der in proxy_config.json eingetragene Proxy mit diesem Namen
 
     SSL-Verhalten:
@@ -491,7 +491,7 @@ def detect_proxy_requirement(
 
     # ── Kein Proxy — direkte Verbindung, SSL immer aktiv ─────────────────────
     if mode == 'direct':
-        logger.info(f"  [1] Direkte Verbindung (kein Proxy) → {test_url} ...")
+        logger.info(f" [1] Direkte Verbindung (kein Proxy) → {test_url} ...")
         if test_connection(test_url, proxies=None, verify_ssl=True, timeout=timeout):
             logger.info("  ✓ Direkte Verbindung OK")
             s = requests.Session()
@@ -505,7 +505,7 @@ def detect_proxy_requirement(
 
     # ── Direkte Verbindung (erster Schritt im Modus 'auto') ───────────────────
     if mode == 'auto':
-        logger.info(f"  [1] Direkte Verbindung → {test_url} ...")
+        logger.info(f" [1] Direkte Verbindung → {test_url} ...")
         if test_connection(test_url, proxies=None, verify_ssl=True, timeout=timeout):
             logger.info("  ✓ Direkte Verbindung OK (kein Proxy)")
             s = requests.Session()
@@ -520,7 +520,7 @@ def detect_proxy_requirement(
         system_proxies = _get_system_proxy_urls()
         step_label = "[2]" if mode == 'auto' else "[1]"
         if system_proxies:
-            logger.info(f"  {step_label} System-Proxy gefunden: {system_proxies}")
+            logger.info(f" {step_label} System-Proxy gefunden: {system_proxies}")
             for proxy_url in system_proxies:
                 proxies_dict = {"http": proxy_url, "https": proxy_url}
 
@@ -554,13 +554,13 @@ def detect_proxy_requirement(
 
                 if probe['status'] == 'needs_kerberos':
                     logger.warning(
-                        f"  ⚠ System-Proxy {proxy_url}: 407 und Kerberos fehlgeschlagen.\n"
+                        f" ! System-Proxy {proxy_url}: 407 und Kerberos fehlgeschlagen.\n"
                         "    pip install pyspnego  (empfohlen)"
                     )
                 else:
                     logger.info(f"  ✗ System-Proxy {proxy_url} nicht erreichbar")
         else:
-            logger.info(f"  {step_label} Keine System-Proxies in OS-Einstellungen gefunden")
+            logger.info(f" {step_label} Keine System-Proxies in OS-Einstellungen gefunden")
 
         if mode == 'system':
             raise ConnectionError(
@@ -584,7 +584,7 @@ def detect_proxy_requirement(
         if not proxy_url:
             raise ValueError(f"Proxy '{proxy_name}' hat keine URL in {PROXY_CONFIG_PATH}.")
 
-        logger.info(f"  [1] Definierter Proxy '{proxy_name}': {proxy_url}")
+        logger.info(f" [1] Definierter Proxy '{proxy_name}': {proxy_url}")
         result = _connect_named_proxy(proxy_name, proxy_url, test_url, timeout, _ok)
         if result is not None:
             return result
@@ -605,9 +605,9 @@ def detect_proxy_requirement(
         pname    = proxy_info.get('name', 'Unbekannt')
         proxy_url = proxy_info.get('url')
         if not proxy_url:
-            logger.warning(f"  ⚠ Proxy '{pname}': Keine URL konfiguriert")
+            logger.warning(f" ! Proxy '{pname}': Keine URL konfiguriert")
             continue
-        logger.info(f"  [3.{idx}] Konfigurierter Proxy '{pname}': {proxy_url}")
+        logger.info(f" [3.{idx}] Konfigurierter Proxy '{pname}': {proxy_url}")
         result = _connect_named_proxy(pname, proxy_url, test_url, timeout, _ok)
         if result is not None:
             return result
@@ -667,7 +667,7 @@ def _connect_named_proxy(proxy_name, proxy_url, test_url, timeout, _ok):
             )
         if kprobe['status'] == 'no_lib':
             logger.warning(
-                f"  ⚠ Proxy '{proxy_name}' benötigt Kerberos, aber Bibliothek fehlt.\n"
+                f" ! Proxy '{proxy_name}' benötigt Kerberos, aber Bibliothek fehlt.\n"
                 "    pip install pyspnego   (empfohlen)\n"
                 "    pip install requests-negotiate-sspi   (Legacy)"
             )
@@ -686,7 +686,7 @@ def initialize_proxy(mode: str = 'auto', proxy_name: Optional[str] = None):
 
     mode:
       'auto'    Autodetect: direkt → System-Proxy → proxy_config.json
-      'system'  Nur System-Proxy (Windows-Einstellungen / Umgebungsvariablen)
+      'system' Nur System-Proxy (Windows-Einstellungen / Umgebungsvariablen)
       'named'   Nur der benannte Proxy aus proxy_config.json
     proxy_name: Proxy-Name (nur bei mode='named')
     """
@@ -724,7 +724,7 @@ def get_session() -> requests.Session:
     global PROXY_CONFIG
 
     if not PROXY_CONFIG.get('initialized', False):
-        logger.warning("⚠️  Proxy noch nicht initialisiert - initialisiere jetzt...")
+        logger.warning(" Proxy noch nicht initialisiert - initialisiere jetzt...")
         initialize_proxy()
 
     if PROXY_CONFIG['session'] is None:
@@ -755,7 +755,7 @@ def get_proxy_config() -> Dict:
     
     # Falls noch nicht initialisiert, initialisiere jetzt
     if not PROXY_CONFIG.get('initialized', False):
-        logger.warning("⚠️  Proxy noch nicht initialisiert - initialisiere jetzt...")
+        logger.warning(" Proxy noch nicht initialisiert - initialisiere jetzt...")
         initialize_proxy()
     
     return PROXY_CONFIG.copy()
@@ -774,7 +774,7 @@ def is_proxy_enabled() -> bool:
     
     # Falls noch nicht initialisiert, initialisiere jetzt
     if not PROXY_CONFIG.get('initialized', False):
-        logger.warning("⚠️  Proxy noch nicht initialisiert - initialisiere jetzt...")
+        logger.warning(" Proxy noch nicht initialisiert - initialisiere jetzt...")
         initialize_proxy()
     
     return PROXY_CONFIG['enabled']

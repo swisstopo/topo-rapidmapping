@@ -172,8 +172,8 @@ def cleanup_temp_directory(temp_dir: Path, keep_on_error: bool = True):
     except Exception as e:
         if keep_on_error:
             logger.warning(
-                f"⚠ Konnte Temp-Verzeichnis nicht löschen: {e}\n"
-                f"  Verzeichnis bleibt für Debugging erhalten: {temp_dir}"
+                f"! Konnte Temp-Verzeichnis nicht löschen: {e}\n"
+                f" Verzeichnis bleibt für Debugging erhalten: {temp_dir}"
             )
         else:
             logger.error(f"✗ Fehler beim Löschen von Temp-Verzeichnis: {e}")

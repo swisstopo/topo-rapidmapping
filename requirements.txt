@@ -1,0 +1,53 @@
+py-multihash==2.0.1
+requests
+rasterio
+pyproj
+urllib3
+
+# Kerberos proxy authentication (optional — nur nötig bei Corporate-Proxies
+# die Windows AD / Kerberos verlangen, z.B. 407 Negotiate).
+#
+# Empfohlen (modern, aktiv gepflegt, kein pywin32 nötig):
+#   pip install pyspnego
+#
+# Legacy-Fallback (funktioniert noch, aber nicht mehr aktiv gepflegt):
+#   pip install requests-negotiate-sspi
+#
+# pyspnego
+# requests-negotiate-sspi
+
+# STAC Client für Abfragen; funktioniert nicht, da QGIS sqlite3 bindings nciht ok sind
+
+# Zusätzliche Tools
+numpy>=1.24.0
+
+# ==============================================================================
+# GDAL Installation - WICHTIG!
+# ==============================================================================
+#
+# Dieses Tool verwendet GDAL via subprocess (gdalinfo, gdal_translate, etc.).
+# GDAL-Bindings werden NICHT benötigt!
+#
+# WINDOWS: OSGeo4W oder QGIS
+# --------------------------
+# 1. Installiere OSGeo4W: https://trac.osgeo.org/osgeo4w/
+#    ODER: Nutze existierende QGIS-Installation
+#
+# 2. Öffne OSGeo4W Shell (oder QGIS-Shell)
+#
+# 3. Installiere Python-Pakete:
+#    pip install -r requirements.txt
+#
+# 4. Teste GDAL:
+#    gdalinfo --version
+#
+# LINUX:
+# ------
+# sudo apt install gdal-bin
+# pip install -r requirements.txt
+#
+# ==============================================================================
+
+# Bestehende Module (müssen im gleichen Verzeichnis sein):
+# - util_publish_stac_fsdi.py
+# - main_multipart_upload_via_api.py

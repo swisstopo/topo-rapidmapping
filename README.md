@@ -1,4 +1,4 @@
-# Swisstopo Rapid Mapping Processor 2.0
+# Swisstopo Rapid Mapping Processor 2.0 RC
 
 Automatisiertes System für die Publikation von Rapid Mapping Daten auf der FSDI STAC Plattform.
 

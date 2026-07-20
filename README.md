@@ -251,14 +251,16 @@ Voraussetzung: Windows, am Active-Directory-Domain angemeldet.
 ### GUI (empfohlen)
 
 ```bash
-python 0_GUI_rapidmapping_STACimport.py
+cmd>python 0_GUI_rapidmapping_STACimport.py
 ```
 
 Grafische Oberfläche (Tkinter) als Alternative zum Terminal-Dialog. Startet
-`rapidmapping_processor.py`/`.exe` im Hintergrund als Subprocess — braucht
-dieselbe GDAL/OSGeo4W-Umgebung wie die CLI (siehe Installation), also am
-besten aus der OSGeo4W Shell starten. Bevorzugt automatisch eine vorhandene
-`rapidmapping_processor.exe` im selben Verzeichnis, sonst wird `python
+`rapidmapping_processor.py`/`.exe` im Hintergrund als Subprocess.
+Mit cmd-Konsole starten:
+```bash
+cmd>python 0_GUI_rapidmapping_STACimport.py
+```
+Bevorzugt automatisch eine vorhandene `rapidmapping_processor.exe`-Anwendung im selben Verzeichnis, sonst wird `python
 rapidmapping_processor.py` verwendet.
 
 Felder:

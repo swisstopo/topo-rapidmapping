@@ -28,9 +28,9 @@ from configuration import (
     ProductType,
     get_product_config,
     validate_timestamp,
+    normalize_cli_timestamp,
     generate_item_name,
     generate_asset_name,
-    get_collection_url,
     STAC_COLLECTION,
     GEOCAT_ID,
     STAC_SCHEME,
@@ -46,6 +46,7 @@ from utilities.kml_generator import create_overview_kml
 from utilities.stac_publisher import publish_to_stac_wrapper
 from utilities.proxy_handler import initialize_proxy, get_configured_proxy_names
 from utilities.credentials import load_stac_credentials
+from utilities.gdal_helpers import GDAL_PERF_FLAGS, supports_progress
 # publish_to_stac importiert lazy (verhindert circular import)
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
@@ -190,26 +191,6 @@ def _ensure_ms_suffix(timestamp: str) -> str:
     return timestamp
 
 
-_GDAL_PROGRESS_SUPPORTED: dict = {}  # cache per executable, e.g. {'gdal_translate': True}
-
-# Performance flags injected into every GDAL command that processes pixels.
-# --config NUM_THREADS ALL_CPUS  → multi-thread COG tile/overview generation
-# --config GDAL_CACHEMAX 512     → 512 MB block cache (avoids repeated disk reads)
-_GDAL_PERF = [
-    "--config", "NUM_THREADS", "ALL_CPUS",
-    "--config", "GDAL_CACHEMAX", "512",
-]
-
-
-def _supports_progress(exe: str) -> bool:
-    """Probe once whether this GDAL build accepts -progress for the given tool."""
-    import subprocess as _sp
-    if exe not in _GDAL_PROGRESS_SUPPORTED:
-        r = _sp.run([exe, "--help"], capture_output=True, text=True)
-        _GDAL_PROGRESS_SUPPORTED[exe] = "-progress" in r.stdout or "-progress" in r.stderr
-    return _GDAL_PROGRESS_SUPPORTED[exe]
-
-
 def _poll_progress(output_path: "Path", ref_size_bytes: int, stop_event, interval: float = 0.5):
     """
     Background thread: polls output_path size and prints a live progress bar.
@@ -268,9 +249,9 @@ def _run_gdal(label: str, cmd: list, output_path: "Path | None" = None) -> bool:
     logger.info(f"  → {label}")
 
     # Inject performance flags right after the executable name
-    cmd = [cmd[0]] + _GDAL_PERF + cmd[1:]
+    cmd = [cmd[0]] + GDAL_PERF_FLAGS + cmd[1:]
 
-    if _supports_progress(cmd[0]):
+    if supports_progress(cmd[0]):
         full_cmd = cmd + ["-progress"]
         result = _sp.run(full_cmd, stderr=_sp.PIPE, text=True)
     else:
@@ -486,7 +467,6 @@ def process_dmc4_workflow(
 
             # Step 2: build VRT mosaics — honour nodata so stripe gaps are transparent
             # gdalbuildvrt does not support -progress, run quietly
-            import subprocess as _sp
             for label, src_dir, vrt_name in [
                 ("RGB", t_rgb, "mosaic_rgb.vrt"),
                 ("NRG", t_nrg, "mosaic_nrg.vrt"),
@@ -578,32 +558,13 @@ def process_photos_workflow(
     debug: bool = False,
 ):
     """
-    import logging as _logging
-    if not debug:
-        for _mod in ['utilities.stac_publisher', 'utilities.credentials',
-                     'utilities.proxy_handler', 'main_multipart_upload_via_api',
-                     'util_publish_stac_fsdi', 'utilities.kml_generator']:
-            _logging.getLogger(_mod).setLevel(_logging.WARNING)
-    # Workflow fuer Einzelbilder: Upload -> KML -> CSV.
+    Workflow für Einzelbilder: Upload -> KML -> CSV.
 
-    v2.2:
-    - KML/CSV Overview-Item: Timestamp t23595900 (ms-Suffix "00")
-    - generate_csv_from_stac fragt STAC per Datum+Suffix ab -> findet alle
-      Items unabhaengig vom ms-Suffix (Bug 3 automatisch geloest)
+    KML/CSV-Overview-Item verwendet Timestamp t23595900 (ms-Suffix "00").
+    generate_csv_from_stac fragt STAC per Datum+Suffix ab -> findet alle
+    Items unabhängig vom ms-Suffix.
     """
     try:
-        import logging
-        from pathlib import Path
-        from configuration import (
-            STAC_COLLECTION, GEOCAT_ID, STAC_SCHEME, STAC_API_PATH,
-            get_product_config, generate_item_name
-        )
-        from utilities.photo_processor import process_individual_photos, generate_csv_from_stac
-        from utilities.kml_generator import create_overview_kml
-        from utilities.stac_publisher import publish_to_stac_wrapper
-
-        logger = logging.getLogger(__name__)
-
         temp_dir = Path("output") if not upload_enabled else Path("temp")
         temp_dir.mkdir(exist_ok=True)
 
@@ -727,28 +688,6 @@ def process_photos_workflow(
         return False
 
 
-def _normalize_cli_timestamp(raw: str) -> str:
-    """
-    Normalize compact timestamp to standard YYYY-MM-DDthhmmss[cc] format.
-
-    Args:
-        raw (str): Raw CLI input, e.g. '20210729t125959' or '20210729'
-
-    Returns:
-        str: Normalized timestamp, e.g. '2021-07-29t125959'
-    """
-    # Already normalized if it contains dashes
-    if '-' in raw:
-        return raw
-    # Match compact: YYYYMMDD[tHHMMSS[CC]]
-    m = re.match(r'^(\d{4})(\d{2})(\d{2})(t\d{6}(\d{2})?)?$', raw)
-    if m:
-        date_part = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
-        time_part = m.group(4) or ''
-        return date_part + time_part
-    return raw  # return as-is; validate_timestamp will reject it later
-
-
 # ============================================================
 # C) DEBUG-MODUS: Direkt hier setzen wenn ohne CLI-Argumente gestartet wird.
 #    True  = sequentielle Verarbeitung + volles Logging (Debugging)
@@ -807,6 +746,9 @@ def main():
                               'oder Proxy-Name aus proxy_config.json (z.B. "BVCOL")'))
 
     args = parser.parse_args()
+    # True wenn Produkt/Input/Timestamp allesamt via CLI übergeben wurden —
+    # steuert sowohl das Überspringen der interaktiven Prompts als auch der
+    # abschliessenden [j/N]-Bestätigung.
     _is_full_cli = bool(args.product and args.input_dir and args.timestamp)
 
     # C) Resolve debug flag: CLI > DEBUG_MODE_DEFAULT
@@ -884,7 +826,7 @@ def main():
             product_type = prompt_product_type()
 
         if args.timestamp:
-            ts = _normalize_cli_timestamp(args.timestamp.lower().strip())
+            ts = normalize_cli_timestamp(args.timestamp.lower().strip())
             if product_type in (ProductType.EBN, ProductType.EBO):
                 # EBN/EBO: accept date only (YYYY-MM-DD)
                 try:
@@ -926,10 +868,7 @@ def main():
         print("=" * 70)
 
         # Skip confirmation when all parameters supplied via CLI
-        _all_cli = (args.input_dir is not None
-                    and args.product is not None
-                    and args.timestamp is not None)
-        if _all_cli:
+        if _is_full_cli:
             logger.info("▶ CLI-Modus: Starte ohne Bestätigung")
             confirm = 'j'
         else:
@@ -943,8 +882,12 @@ def main():
         print("=" * 70 + "\n")
 
         # ── Log-Datei einrichten ──────────────────────────────────────────────
-        _log_ts       = datetime.now().strftime('%Y%m%d_%H%M%S')
-        _log_filename = f"Log_{product_type.value}_{_log_ts}.txt"
+        # Namenskonvention: <stac-datum>_<produkttyp>_<importDatum>.log
+        # z.B. 2025-09-03_ebn_20260720-143512.log
+        _logs_dir     = Path("_logs")
+        _logs_dir.mkdir(exist_ok=True)
+        _import_ts    = datetime.now().strftime('%Y%m%d-%H%M%S')
+        _log_filename = _logs_dir / f"{timestamp_or_date}_{product_type.value}_{_import_ts}.log"
         _log_handler  = logging.FileHandler(_log_filename, encoding='utf-8')
         _log_handler.setLevel(logging.INFO)
         _log_handler.setFormatter(

@@ -131,32 +131,6 @@ def get_jpg_files(directory: Path, recursive: bool = False) -> List[Path]:
     )
 
 
-def create_file_list(files: List[Path], output_file: Path) -> Path:
-    """
-    Erstellt eine Textdatei mit Liste von Dateipfaden.
-    
-    Args:
-        files (List[Path]): Liste der Dateipfade
-        output_file (Path): Ausgabe-Datei
-        
-    Returns:
-        Path: Pfad zur erstellten Datei
-        
-    Raises:
-        IOError: Bei Schreibfehlern
-    """
-    try:
-        with open(output_file, 'w', encoding='utf-8') as f:
-            for file in files:
-                f.write(f"{file}\n")
-        
-        logger.info(f"✓ File-Liste erstellt: {output_file} ({len(files)} Einträge)")
-        return output_file
-        
-    except Exception as e:
-        raise IOError(f"Fehler beim Erstellen der File-Liste: {e}")
-
-
 def cleanup_temp_directory(temp_dir: Path, keep_on_error: bool = True):
     """
     Löscht temporäres Verzeichnis nach erfolgreicher Verarbeitung.
@@ -179,20 +153,6 @@ def cleanup_temp_directory(temp_dir: Path, keep_on_error: bool = True):
             logger.error(f"✗ Fehler beim Löschen von Temp-Verzeichnis: {e}")
 
 
-def ensure_directory_exists(directory: Path) -> Path:
-    """
-    Stellt sicher dass ein Verzeichnis existiert, erstellt es falls nötig.
-    
-    Args:
-        directory (Path): Verzeichnis
-        
-    Returns:
-        Path: Verzeichnis-Pfad
-    """
-    directory.mkdir(parents=True, exist_ok=True)
-    return directory
-
-
 def get_file_size_mb(file_path: Path) -> float:
     """
     Gibt Dateigröße in Megabytes zurück.
@@ -205,25 +165,3 @@ def get_file_size_mb(file_path: Path) -> float:
     """
     size_bytes = file_path.stat().st_size
     return size_bytes / (1024 * 1024)
-
-
-def validate_file_exists(file_path: Path) -> Path:
-    """
-    Validiert dass eine Datei existiert.
-    
-    Args:
-        file_path (Path): Dateipfad
-        
-    Returns:
-        Path: Validierter Pfad
-        
-    Raises:
-        FileNotFoundError: Wenn Datei nicht existiert
-    """
-    if not file_path.exists():
-        raise FileNotFoundError(f"Datei nicht gefunden: {file_path}")
-    
-    if not file_path.is_file():
-        raise ValueError(f"Pfad ist keine Datei: {file_path}")
-    
-    return file_path

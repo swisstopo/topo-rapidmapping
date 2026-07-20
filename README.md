@@ -26,15 +26,23 @@ in einem einzigen, benutzerfreundlichen Workflow mit automatischer Proxy-Erkennu
 
 ```
 rapidmapping_processor/
-├── rapidmapping_processor.py      # Hauptskript (CLI)
+├── 0_GUI_rapidmapping_STACimport.py  # GUI-Einstiegspunkt (empfohlen)
+├── rapidmapping_processor.py      # Hauptskript (CLI, auch als .exe)
 ├── configuration.py                # Produktdefinitionen & Konfiguration
 ├── requirements.txt                # Python-Dependencies
 ├── setup.bat                       # Windows Setup-Script
+├── test_functions.py               # Unit-Tests (siehe Abschnitt Tests)
 ├── README.md                       # Diese Datei
+├── gui/                             # GUI-Module (Tkinter)
+│   ├── app.py                     # Hauptfenster: Formular, Validierung, Log
+│   ├── runner.py                  # Subprocess-Ausführung + Live-Streaming
+│   ├── theme.py                   # Hell/Dunkel-Theme
+│   └── config.py                  # Persistierte GUI-Einstellungen
 ├── utilities/                      # Hilfsfunktionen
 │   ├── credentials.py             # Credentials-Management (INT/PROD)
 │   ├── proxy_handler.py           # Proxy-Erkennung & VPN-Support
 │   ├── file_handler.py            # Datei-Operationen
+│   ├── gdal_helpers.py            # Gemeinsame GDAL-Performance-Flags & -progress-Erkennung
 │   ├── mosaic_processor.py        # COG-File Processing
 │   ├── photo_processor.py         # Einzelbild-Verarbeitung
 │   ├── kml_generator.py           # KML-Overview via STAC-Abfrage
@@ -42,6 +50,7 @@ rapidmapping_processor/
 ├── secrets/                        # Credentials (NICHT in Git!)
 │   ├── stac_credentials.json      # STAC API-Keys (INT + PROD)
 │   └── proxy_config.json          # Proxy-Konfiguration
+├── _logs/                          # Log-Datei pro Lauf (siehe Abschnitt Logging)
 ├── temp/                           # Temporäre Dateien (wird gelöscht)
 ├── util_publish_stac_fsdi.py      # Bestehender STAC-Publisher
 └── main_multipart_upload_via_api.py # Multipart-Upload
@@ -225,7 +234,45 @@ Voraussetzung: Windows, am Active-Directory-Domain angemeldet.
 
 ## Verwendung
 
-### Grundlegende Commands
+### GUI (empfohlen)
+
+```bash
+python 0_GUI_rapidmapping_STACimport.py
+```
+
+Grafische Oberfläche (Tkinter) als Alternative zum Terminal-Dialog. Startet
+`rapidmapping_processor.py`/`.exe` im Hintergrund als Subprocess — braucht
+dieselbe GDAL/OSGeo4W-Umgebung wie die CLI (siehe Installation), also am
+besten aus der OSGeo4W Shell starten. Bevorzugt automatisch eine vorhandene
+`rapidmapping_processor.exe` im selben Verzeichnis, sonst wird `python
+rapidmapping_processor.py` verwendet.
+
+Felder:
+
+| Feld | Entspricht CLI-Flag |
+|------|---------------------|
+| Umgebung (INT/PROD) | `--prod` |
+| Input-Verzeichnis (Durchsuchen…) | `--input` |
+| Produkttyp (Dropdown) | `--product` |
+| Zeitstempel/Datum | `--timestamp` |
+| STAC-Upload | `--upload` |
+| Debug-Modus | `--debug` |
+| Netzwerk-Modus (Dropdown) | `--proxy` |
+
+- **Start-Button bleibt deaktiviert**, bis Verzeichnis, Zeitstempel-Format
+  (abhängig vom gewählten Produkttyp) und — falls Upload aktiv — vorhandene
+  STAC-Credentials alle gültig sind (rote Umrandung bei ungültigen Feldern).
+  Validiert mit denselben Funktionen wie die CLI (`configuration.py`,
+  `utilities/file_handler.py`) — keine abweichende Logik.
+- Vor dem Start erscheint eine Zusammenfassung zur Bestätigung.
+- **Abbrechen-Button** bricht einen laufenden Import sauber ab
+  (`terminate()`/`kill()` des Subprozesses).
+- Live-Log-Fenster, inkl. korrekt aktualisierter Fortschrittsbalken (z.B.
+  beim Multipart-Upload großer COGs).
+- Hell/Dunkel-Theme (Standard: Dunkel), Theme und letztes Input-Verzeichnis
+  werden lokal in `gui_config.json` gespeichert.
+
+### Grundlegende Commands (CLI)
 
 ```bash
 # INT-Environment (Standard)
@@ -513,6 +560,35 @@ class ProductType(Enum):
     EBO       = "ebo"         # Einzelbilder Oblique
 ```
 
+## Tests
+
+`test_functions.py` enthält Unit-Tests für die reinen Python-Funktionen des
+Projekts (Namenskonventionen, Validierung, Timestamp-Parsing, Dateisuche
+usw.) — alles ohne echten GDAL-Aufruf, ohne Netzwerk und ohne STAC-Upload,
+läuft also überall wo Python installiert ist (auch ohne OSGeo4W-Umgebung).
+Module mit rasterio/pyproj-Importen auf Modulebene (`util_publish_stac_fsdi.py`)
+werden dafür per Mock ersetzt.
+
+```bash
+python test_functions.py
+# oder, falls installiert:
+python -m pytest test_functions.py -v
+```
+
+Abgedeckt sind u. a.:
+- `configuration.py`: Zeitstempel-Validierung/-Normalisierung, Item-/Asset-Namensbildung
+- `utilities/file_handler.py`: Verzeichnis-Validierung, Bilddatei-Suche
+- `utilities/gdal_helpers.py`: `-progress`-Erkennung inkl. Caching (Subprocess gemockt)
+- `utilities/photo_processor.py`: `parse_exif_timestamp()` — Regressionstest für "kein
+  Fallback aufs aktuelle Datum bei fehlendem Timestamp" (siehe Version History v2.4);
+  `_assign_sequential_ms_offsets()` für Burst-Kollisionen
+- `util_publish_stac_fsdi.py`: `asset_create_title()` — Regressionstest für den
+  behobenen `AttributeError` bei nicht erkennbarem Dateinamensmuster
+
+**Nicht abgedeckt** (würden echtes GDAL, Netzwerk oder STAC-Zugangsdaten
+brauchen): der komplette `rapidmapping_processor.py`-Hauptlauf, echte
+STAC-Uploads, GDAL-Subprozessaufrufe selbst.
+
 ## Troubleshooting
 
 ### GDAL nicht gefunden
@@ -603,6 +679,25 @@ Das Script gibt detailliertes Feedback:
 INFO:  ✓ Erfolgreiche Operation
 WARNING: ⚠ Warnung (nicht kritisch)
 ERROR: ✗ Fehler (kritisch)
+```
+
+### Log-Datei
+
+Jeder Lauf schreibt automatisch eine Log-Datei in den Ordner `_logs/`
+(wird bei Bedarf angelegt):
+
+```
+_logs/<stac-datum>_<produkttyp>_<importDatum>.log
+```
+
+- `<stac-datum>`: Datum/Zeitstempel der verarbeiteten Aufnahme (`--timestamp`),
+  z.B. `2025-09-03` oder `2024-07-15t143000`
+- `<produkttyp>`: `ebn`, `ebo`, `qdop-rgb`, `qdop-nrg` oder `qdop-dmc4`
+- `<importDatum>`: Zeitpunkt des Programmlaufs, Format `JJJJMMTT-hhmmss`
+
+Beispiel:
+```
+_logs/2025-09-03_ebn_20260720-143512.log
 ```
 
 ### Log-Level anpassen
@@ -1009,6 +1104,14 @@ Bei Problemen:
 MIT
 
 ## Version History
+
+### v2.4 (2026-07)
+- **GUI**: Neue grafische Oberfläche `0_GUI_rapidmapping_STACimport.py` (Tkinter) als Alternative zum Terminal-Dialog — live validierte Formularfelder, Bestätigungsdialog, echter Abbrechen-Button, Live-Log mit korrekt aktualisierten Fortschrittsbalken, Hell/Dunkel-Theme (Standard: Dunkel)
+- **Log-Dateien**: Landen jetzt in `_logs/` statt im Hauptverzeichnis, neue Namenskonvention `<stac-datum>_<produkttyp>_<importDatum>.log`
+- **EBN/EBO ohne Timestamp**: Bilder ohne aus EXIF/Dateiname ermittelbaren Zeitstempel werden nicht mehr mit dem aktuellen Datum importiert, sondern übersprungen und klar protokolliert (Terminal + Log)
+- **Multipart-Upload**: Part-Grösse wird dynamisch aus der Dateigrösse abgeleitet — behebt einen harten ~24 GB-Limit-Fehler bei sehr grossen COGs (z.B. Quickmosaik-Ereignisse)
+- **Cleanup**: toter Code entfernt (u.a. `utilities/stac_query.py`), GDAL-Performance-Flags/`-progress`-Erkennung in `utilities/gdal_helpers.py` zentralisiert, `util_publish_stac_fsdi.py` nutzt jetzt durchgängig `logging` statt `print()`
+- **Tests**: `test_functions.py` — Unit-Tests für Namenskonventionen, Zeitstempel-Parsing, Dateisuche und die beiden oben genannten Regressionsfixe (kein Datum-Fallback, `asset_create_title`)
 
 ### v2.3 (2025-05)
 - **Kerberos-Proxy EXE-Fix**: 407-Fehler in der generierten EXE behoben (win32timezone + SSPI-Tunnel-Patch)

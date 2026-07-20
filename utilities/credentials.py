@@ -181,29 +181,3 @@ def load_stac_credentials(
         )
 
 
-def validate_credentials(username: str, password: str) -> bool:
-    """
-    Validiert Credentials (einfache Prüfung auf nicht-leere Strings).
-    
-    Args:
-        username (str): Username
-        password (str): Password
-        
-    Returns:
-        bool: True wenn gültig, False sonst
-    """
-    return bool(username and username.strip() and 
-                password and password.strip())
-
-
-def validate_environment(environment: str) -> bool:
-    """
-    Validiert Environment-String.
-    
-    Args:
-        environment (str): Environment ("INT" oder "PROD")
-        
-    Returns:
-        bool: True wenn gültig, False sonst
-    """
-    return environment.upper() in ["INT", "PROD"]

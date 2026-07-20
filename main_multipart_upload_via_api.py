@@ -524,11 +524,11 @@ def main():
         raise SystemExit(interrupt) from interrupt
 
 
-def multipart_upload(env, collection, item, asset, filepath, username, password, 
-                     force=True, verbose=False, proxy_config=None):
+def multipart_upload(env, collection, item, asset, filepath, username, password,
+                     force=True, verbose=False, proxy_config=None, part_size_mb=None):
     """
     Upload large file to STAC using multi-part uploads.
-    
+
     Args:
         env (str): Environment (localhost, dev, int, prod)
         collection (str): Collection name
@@ -540,15 +540,18 @@ def multipart_upload(env, collection, item, asset, filepath, username, password,
         force (bool): Force upload (cancel existing uploads)
         verbose (bool): Enable verbose logging
         proxy_config (dict): Proxy configuration with 'enabled', 'proxies', and 'session' keys
-    
+        part_size_mb (int): Optional part size in MB. Defaults to DEFAULT_PART_SIZE.
+            Must be large enough that number_parts = filesize / part_size_mb stays
+            below MAX_PARTS_NUMBER (100), otherwise the STAC API rejects the upload.
+
     Returns:
         bool: True if successful, False otherwise
     """
     import os
-    
+
     # Initialize HTTP sessions with proxy configuration FIRST
     initialize_http_session(proxy_config)
-    
+
     # Set environment variables for credentials
     os.environ['STAC_USER'] = username
     os.environ['STAC_PASSWORD'] = password
@@ -562,6 +565,7 @@ def multipart_upload(env, collection, item, asset, filepath, username, password,
         '--username', username,
         '--password', password,
     ]
+    if part_size_mb: argv.extend(['--part-size', str(part_size_mb)])
     if verbose: argv.append('--verbose')
     if force:   argv.append('--force')
 

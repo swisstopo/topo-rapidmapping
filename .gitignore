@@ -167,3 +167,6 @@ secrets/
 temp/
 results/
 rclone/
+
+# GUI: lokal persistierte Einstellungen (Theme, letztes Verzeichnis)
+gui_config.json

@@ -1135,7 +1135,7 @@ MIT
 - **GUI**: Neue grafische Oberfläche `0_GUI_rapidmapping_STACimport.py` (Tkinter) als Alternative zum Terminal-Dialog — live validierte Formularfelder, Bestätigungsdialog, echter Abbrechen-Button, Live-Log mit korrekt aktualisierten Fortschrittsbalken, Hell/Dunkel-Theme (Standard: Dunkel)
 - **Log-Dateien**: Landen jetzt in `_logs/` statt im Hauptverzeichnis, neue Namenskonvention `<stac-datum>_<produkttyp>_<importDatum>.log`
 - **EBN/EBO ohne Timestamp**: Bilder ohne aus EXIF/Dateiname ermittelbaren Zeitstempel werden nicht mehr mit dem aktuellen Datum importiert, sondern übersprungen und klar protokolliert (Terminal + Log)
-- **Multipart-Upload**: Part-Grösse wird dynamisch aus der Dateigrösse abgeleitet — behebt einen harten ~24 GB-Limit-Fehler bei sehr grossen COGs (z.B. Quickmosaik-Ereignisse)
+- **Multipart-Upload**: Part-Grösse wird dynamisch aus der Dateigrösse abgeleitet — behebt einen harten ~24 GB-Limit-Fehler bei sehr grossen COGs (z.B. Quickmosaik eines ganzen Kantons)
 - **Cleanup**: toter Code entfernt (u.a. `utilities/stac_query.py`), GDAL-Performance-Flags/`-progress`-Erkennung in `utilities/gdal_helpers.py` zentralisiert, `util_publish_stac_fsdi.py` nutzt jetzt durchgängig `logging` statt `print()`
 - **Tests**: `test_functions.py` — Unit-Tests für Namenskonventionen, Zeitstempel-Parsing, Dateisuche und die beiden oben genannten Regressionsfixe (kein Datum-Fallback, `asset_create_title`)
 

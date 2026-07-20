@@ -58,9 +58,9 @@ rapidmapping_processor/
 
 ```
 
-## Installation
+## A - Installation
 
-### 1. GDAL-Tools installieren (kommt mit QGIS, meist bereits installiert)
+### 1.1 GDAL-Tools installieren (kommt mit QGIS, meist bereits installiert)
 
 #### Windows (OSGeo4W Shell)
 1. Download: https://trac.osgeo.org/osgeo4w/
@@ -78,27 +78,27 @@ sudo apt update
 sudo apt install gdal-bin python3-gdal
 ```
 
-### 2. .EXE (1. Wahl / empfohlen)
+### 1.2 .EXE (1. Wahl / empfohlen)
 
 #### Windows (OSGeo4W Shell)
-1. Kopiere Secrets Folder und dist/rapidmapping_processor.exe ind das gleiche Verezeichnis
+1. Kopiere Secrets Folder und dist/rapidmapping_processor.exe in das gleiche Verezeichnis
 2. Führe Script in OSGeo4W Shell aus
 ```bash
 rapidmapping_processor.exe
 ```
 
-### 3. GUI via Python (2. Wahl)
+### 1.3 GUI via Python (2. Wahl)
 
 #### GUI starten mit OSGeo4W (QGIS Python):
 ```bash
-# Kopiere Secrets Folder in C:/LegacySW/topo-rapidmapping
+# Kopiere Secrets Folder und dist/rapidmapping_processor.exe in C:/LegacySW/topo-rapidmapping
 # Win-Taste + "OSGeo4W" Shell starten.
 # OSGeo4W-Terminal öffnet sich
 # Terminal: cd /d C:/LegacySW/topo-rapidmapping (enter)
 # Terminal: python "0_GUI_rapidmapping_STACimport.py" (enter)
 ```
 
-### 4. Python Virtual Environment (3. Wahl)
+### 1.4 Python Virtual Environment (3. Wahl)
 
 #### Mit QGIS Python:
 ```bash
@@ -111,13 +111,13 @@ python3 -m venv .venv
 source .venv/bin/activate
 ```
 
-### 5. Python-Dependencies installieren
+### 2. Python-Dependencies installieren
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 6. Automatisches Setup (Windows)
+### 3. Automatisches Setup (Windows)
 
 ```bash
 setup.bat
@@ -130,7 +130,7 @@ Dieses Script prüft:
 - Installiert Dependencies
 - Prüft Credentials
 
-## Konfiguration
+## B - Konfiguration
 
 ### STAC Credentials
 

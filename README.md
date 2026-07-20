@@ -50,6 +50,7 @@ rapidmapping_processor/
 ├── secrets/                        # Credentials (NICHT in Git!)
 │   ├── stac_credentials.json      # STAC API-Keys (INT + PROD)
 │   └── proxy_config.json          # Proxy-Konfiguration
+├── dist/                           # PyInstaller-Output (.exe, NICHT in Git! siehe Abschnitt "Generate Executable")
 ├── _logs/                          # Log-Datei pro Lauf (siehe Abschnitt Logging)
 ├── temp/                           # Temporäre Dateien (wird gelöscht)
 ├── util_publish_stac_fsdi.py      # Bestehender STAC-Publisher
@@ -59,18 +60,16 @@ rapidmapping_processor/
 
 ## Installation
 
-### 1. GDAL-Tools installieren (kommt mit QGIS)
+### 1. GDAL-Tools installieren (kommt mit QGIS, meist bereits installiert)
 
 #### Windows (OSGeo4W Shell)
 1. Download: https://trac.osgeo.org/osgeo4w/
 2. Installiere GDAL-Pakete
 3. Führe Script in OSGeo4W Shell aus
 
-**ODER: Nutze QGIS** (empfohlen)
+**QGIS bereits installiert** (empfohlen)
 ```bash
 # QGIS enthält bereits GDAL
-# Öffne "OSGeo4W Shell" aus QGIS-Installation
-# Beispiel-Pfad: C:\Program Files\QGIS 3.40.7\OSGeo4W.bat
 ```
 
 #### Linux
@@ -79,7 +78,7 @@ sudo apt update
 sudo apt install gdal-bin python3-gdal
 ```
 
-### .EXE (empfohlen)
+### 2. .EXE (1. Wahl / empfohlen)
 
 #### Windows (OSGeo4W Shell)
 1. Kopiere Secrets Folder und dist/rapidmapping_processor.exe ind das gleiche Verezeichnis
@@ -88,7 +87,18 @@ sudo apt install gdal-bin python3-gdal
 rapidmapping_processor.exe
 ```
 
-### 3. Python Virtual Environment ( 2. Wahl )
+### 3. GUI via Python (2. Wahl)
+
+#### GUI starten mit OSGeo4W (QGIS Python):
+```bash
+# Kopiere Secrets Folder in C:/LegacySW/topo-rapidmapping
+# Win-Taste + "OSGeo4W" Shell starten.
+# OSGeo4W-Terminal öffnet sich
+# Terminal: cd /d C:/LegacySW/topo-rapidmapping (enter)
+# Terminal: python "0_GUI_rapidmapping_STACimport.py" (enter)
+```
+
+### 4. Python Virtual Environment (3. Wahl)
 
 #### Mit QGIS Python:
 ```bash
@@ -101,13 +111,13 @@ python3 -m venv .venv
 source .venv/bin/activate
 ```
 
-### 3. Python-Dependencies installieren
+### 5. Python-Dependencies installieren
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 4. Automatisches Setup (Windows)
+### 6. Automatisches Setup (Windows)
 
 ```bash
 setup.bat
@@ -271,6 +281,18 @@ Felder:
   beim Multipart-Upload großer COGs).
 - Hell/Dunkel-Theme (Standard: Dunkel), Theme und letztes Input-Verzeichnis
   werden lokal in `gui_config.json` gespeichert.
+
+#### GUI-Workflow (Schritt für Schritt)
+
+1. **Umgebung wählen** (INT oder PROD)
+2. **Input-Verzeichnis** über "Durchsuchen…" auswählen
+3. **Produkttyp** aus Dropdown wählen (QDOP RGB/NRG, EBN, EBO, QDOP-DMC4)
+4. **Zeitstempel/Datum** eingeben (Format abhängig vom Produkttyp)
+5. **Netzwerk-Modus** wählen, falls Upload aktiv (Autodetect/Kein Proxy/Bundesnetz/definierter Proxy)
+6. **STAC-Upload** und **Debug-Modus** optional aktivieren
+7. Sobald alle Felder gültig sind (keine rote Umrandung), wird der **Start-Button** aktiv
+8. **Zusammenfassung bestätigen**
+9. **Live-Log** und Fortschrittsbalken verfolgen; bei Bedarf mit **Abbrechen** sauber stoppen
 
 ### Grundlegende Commands (CLI)
 

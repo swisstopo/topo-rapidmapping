@@ -140,8 +140,8 @@ class RapidMappingApp(tk.Tk):
         self.dir_hint.grid(row=row, column=1, sticky="w")
         row += 1
 
-        # Produkttyp
-        ttk.Label(form, text="Produkttyp:").grid(row=row, column=0, sticky="w", pady=6)
+        # Produkt - Typ
+        ttk.Label(form, text="Produkt - Typ:").grid(row=row, column=0, sticky="w", pady=6)
         self.product_var = tk.StringVar()
         self.product_combo = ttk.Combobox(
             form, textvariable=self.product_var, state="readonly",
@@ -172,8 +172,8 @@ class RapidMappingApp(tk.Tk):
         )
         row += 1
 
-        # Netzwerk-Modus
-        ttk.Label(form, text="Netzwerk-Modus:").grid(row=row, column=0, sticky="w", pady=6)
+        # Proxy - Typ
+        ttk.Label(form, text="Proxy - Typ:").grid(row=row, column=0, sticky="w", pady=6)
         proxy_values = ["auto", "direct", "system"] + get_configured_proxy_names()
         self.proxy_var = tk.StringVar(value="auto")
         self.proxy_combo = ttk.Combobox(
@@ -378,7 +378,7 @@ class RapidMappingApp(tk.Tk):
         elif ok_ts:
             self._set_hint(self.ts_hint, "✓ Format gültig", ok=True)
         else:
-            self._set_hint(self.ts_hint, "✗ Ungültiges Format für den gewählten Produkttyp")
+            self._set_hint(self.ts_hint, "✗ Ungültiges Format für den gewählten Produkt - Typ")
 
         if self._gdal_on_path():
             self._set_hint(
@@ -468,7 +468,7 @@ class RapidMappingApp(tk.Tk):
         summary = (
             f"Umgebung:      {self.env_var.get()}\n"
             f"Verzeichnis:   {self.input_dir_var.get().strip()}\n"
-            f"Produkttyp:    {label}\n"
+            f"Produkt - Typ: {label}\n"
             f"Zeitstempel:   {self.timestamp_var.get().strip()}\n"
             f"STAC-Upload:   {'aktiv' if self.upload_var.get() else 'AUS (nur lokal in ./output/)'}\n"
         )

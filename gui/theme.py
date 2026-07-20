@@ -105,6 +105,15 @@ def apply_theme(root: tk.Tk, style: ttk.Style, dark: bool) -> dict:
         "TCombobox", fieldbackground=T["input"], foreground=T["fg"],
         background=T["btn"], arrowcolor=T["fg"]
     )
+    # clam-Theme überschreibt sonst fieldbackground/foreground im "readonly"-
+    # Zustand mit eigenen Default-Farben (weiss) statt obiger Konfiguration.
+    style.map(
+        "TCombobox",
+        fieldbackground=[("readonly", T["input"]), ("disabled", T["panel"])],
+        foreground=[("readonly", T["fg"]), ("disabled", T["fg_dim"])],
+        background=[("readonly", T["btn"])],
+        arrowcolor=[("readonly", T["fg"])],
+    )
     root.option_add("*TCombobox*Listbox.background", T["input"])
     root.option_add("*TCombobox*Listbox.foreground", T["fg"])
     root.option_add("*TCombobox*Listbox.selectBackground", T["accent"])

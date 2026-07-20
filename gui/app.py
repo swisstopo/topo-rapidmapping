@@ -151,7 +151,7 @@ class RapidMappingApp(tk.Tk):
         row += 1
 
         # Zeitstempel/Datum
-        self.timestamp_label = ttk.Label(form, text="Datum:")
+        self.timestamp_label = ttk.Label(form, text="TimeStamp:")
         self.timestamp_label.grid(row=row, column=0, sticky="w", pady=6)
         self.timestamp_var = tk.StringVar()
         self.ts_entry = ttk.Entry(form, textvariable=self.timestamp_var)
@@ -297,10 +297,10 @@ class RapidMappingApp(tk.Tk):
     def _on_product_changed(self, *_):
         _, _, fmt = self._current_product()
         if fmt == "date":
-            self.timestamp_label.configure(text="Datum:")
+            self.timestamp_label.configure(text="TimeStamp:")
             self.ts_hint.configure(text='Format: JJJJ-MM-TT  (z.B. 2025-09-03)')
         else:
-            self.timestamp_label.configure(text="Zeitstempel:")
+            self.timestamp_label.configure(text="TimeStamp:")
             self.ts_hint.configure(text='Format: JJJJ-MM-TTthhmmss  (z.B. 2024-07-15t143000)')
         self._revalidate()
 
@@ -378,7 +378,7 @@ class RapidMappingApp(tk.Tk):
         elif ok_ts:
             self._set_hint(self.ts_hint, "✓ Format gültig", ok=True)
         else:
-            self._set_hint(self.ts_hint, "✗ Ungültiges Format für den gewählten Produkt - Typ")
+            self._set_hint(self.ts_hint, f"✗ Ungültiges Format — {format_hint}")
 
         if self._gdal_on_path():
             self._set_hint(
@@ -469,7 +469,7 @@ class RapidMappingApp(tk.Tk):
             f"Umgebung:      {self.env_var.get()}\n"
             f"Verzeichnis:   {self.input_dir_var.get().strip()}\n"
             f"Produkt - Typ: {label}\n"
-            f"Zeitstempel:   {self.timestamp_var.get().strip()}\n"
+            f"TimeStamp:     {self.timestamp_var.get().strip()}\n"
             f"STAC-Upload:   {'aktiv' if self.upload_var.get() else 'AUS (nur lokal in ./output/)'}\n"
         )
         if not messagebox.askyesno("Verarbeitung starten?", summary + "\nJetzt starten?"):

@@ -23,7 +23,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from configuration import normalize_cli_timestamp, validate_timestamp  # noqa: E402
+from configuration import (  # noqa: E402
+    normalize_cli_timestamp, validate_timestamp,
+    COG_CONFIG, COG_COMPRESS_OPTIONS,
+)
 from utilities.file_handler import validate_directory  # noqa: E402
 from utilities.proxy_handler import get_configured_proxy_names  # noqa: E402
 
@@ -150,6 +153,33 @@ class RapidMappingApp(tk.Tk):
         self.product_combo.grid(row=row, column=1, sticky="w")
         row += 1
 
+        # COG-Erzeugung (COMPRESS/QUALITY) — nur bei QDOP-DMC4 sichtbar
+        # (einziger Workflow, der selbst einen COG via gdal_translate
+        # erzeugt). Output ist immer 8-Bit.
+        self.cog_label = ttk.Label(form, text="COG-Kompression:")
+        self.cog_label.grid(row=row, column=0, sticky="w", pady=6)
+        self.cog_frame = ttk.Frame(form)
+        cog_frame = self.cog_frame
+        cog_frame.grid(row=row, column=1, sticky="w")
+        self.cog_compress_var = tk.StringVar(value=COG_CONFIG['compress'])
+        self.cog_compress_combo = ttk.Combobox(
+            cog_frame, textvariable=self.cog_compress_var, state="readonly",
+            values=COG_COMPRESS_OPTIONS, width=10
+        )
+        self.cog_compress_combo.pack(side="left")
+        self.cog_quality_label = ttk.Label(cog_frame, text="Qualität:")
+        self.cog_quality_label.pack(side="left", padx=(14, 4))
+        self.cog_quality_var = tk.StringVar(value=str(COG_CONFIG['quality']))
+        self.cog_quality_spin = ttk.Spinbox(
+            cog_frame, textvariable=self.cog_quality_var,
+            from_=1, to=100, width=5
+        )
+        self.cog_quality_spin.pack(side="left")
+        row += 1
+        self.cog_hint = ttk.Label(form, text="8-Bit", foreground=self._hint_color())
+        self.cog_hint.grid(row=row, column=1, sticky="w")
+        row += 1
+
         # Zeitstempel/Datum
         self.timestamp_label = ttk.Label(form, text="TimeStamp:")
         self.timestamp_label.grid(row=row, column=0, sticky="w", pady=6)
@@ -224,7 +254,9 @@ class RapidMappingApp(tk.Tk):
         self.timestamp_var.trace_add("write", self._revalidate)
         self.upload_var.trace_add("write", self._revalidate)
         self.interp_var.trace_add("write", self._revalidate)
+        self.cog_quality_var.trace_add("write", self._revalidate)
         self.product_combo.bind("<<ComboboxSelected>>", self._on_product_changed)
+        self.cog_compress_combo.bind("<<ComboboxSelected>>", self._on_cog_compress_changed)
 
     # ------------------------------------------------------------------
     # Theme
@@ -288,6 +320,12 @@ class RapidMappingApp(tk.Tk):
         if last_proxy in self.proxy_combo["values"]:
             self.proxy_var.set(last_proxy)
 
+        last_compress = self._settings.get("last_cog_compress", COG_CONFIG['compress'])
+        if last_compress in COG_COMPRESS_OPTIONS:
+            self.cog_compress_var.set(last_compress)
+        self.cog_quality_var.set(str(self._settings.get("last_cog_quality", COG_CONFIG['quality'])))
+        self._on_cog_compress_changed()
+
     def _current_product(self):
         idx = self.product_combo.current()
         if idx < 0:
@@ -302,7 +340,29 @@ class RapidMappingApp(tk.Tk):
         else:
             self.timestamp_label.configure(text="TimeStamp:")
             self.ts_hint.configure(text='Format: JJJJ-MM-TTthhmmss  (z.B. 2024-07-15t143000)')
+
+        self._update_cog_controls_state()
         self._revalidate()
+
+    def _on_cog_compress_changed(self, *_):
+        self._update_cog_controls_state()
+
+    def _update_cog_controls_state(self):
+        """COG-Kompression/Qualität nur bei Produkt-Typ QDOP-DMC4 sichtbar
+        (einziger Workflow, der einen COG selbst erzeugt); Qualität
+        zusätzlich nur bei COMPRESS=JPEG editierbar."""
+        _, product_cli, _ = self._current_product()
+        cog_visible = (product_cli == "qdop-dmc4")
+        if cog_visible:
+            self.cog_label.grid()
+            self.cog_frame.grid()
+            self.cog_hint.grid()
+        else:
+            self.cog_label.grid_remove()
+            self.cog_frame.grid_remove()
+            self.cog_hint.grid_remove()
+        is_jpeg = self.cog_compress_var.get().upper() == "JPEG"
+        self.cog_quality_spin.configure(state="normal" if is_jpeg else "disabled")
 
     # ------------------------------------------------------------------
     # Validierung — nutzt dieselben Funktionen wie die CLI
@@ -411,12 +471,26 @@ class RapidMappingApp(tk.Tk):
         self.start_btn.configure(state="normal" if all_ok else "disabled")
 
     def _update_summary(self):
-        label, _, _ = self._current_product()
+        label, product_cli, _ = self._current_product()
+        cog_part = ""
+        if product_cli == "qdop-dmc4":
+            compress = self.cog_compress_var.get()
+            cog_part = f"   |   COG: {compress}"
+            if compress.upper() == "JPEG":
+                cog_part += f" Q{self._cog_quality_value()}"
         self.summary_label.configure(text=(
             f"Umgebung: {self.env_var.get()}   |   Produkt: {label}   |   "
             f"Upload: {'aktiv' if self.upload_var.get() else 'aus (→ ./output/)'}   |   "
-            f"Debug: {'an' if self.debug_var.get() else 'aus'}"
+            f"Debug: {'an' if self.debug_var.get() else 'aus'}{cog_part}"
         ))
+
+    def _cog_quality_value(self) -> int:
+        """Liest den Qualitäts-Spinbox-Wert robust aus (Fallback: Default)."""
+        try:
+            q = int(self.cog_quality_var.get())
+            return q if 1 <= q <= 100 else COG_CONFIG['quality']
+        except (ValueError, TypeError):
+            return COG_CONFIG['quality']
 
     # ------------------------------------------------------------------
     # Verzeichnis wählen
@@ -461,10 +535,14 @@ class RapidMappingApp(tk.Tk):
             args.append("--prod")
         if self.debug_var.get():
             args.append("--debug")
+        if product_cli == "qdop-dmc4":
+            args += ["--cog-compress", self.cog_compress_var.get()]
+            if self.cog_compress_var.get().upper() == "JPEG":
+                args += ["--cog-quality", str(self._cog_quality_value())]
         return args
 
     def _on_start_clicked(self):
-        label, _, _ = self._current_product()
+        label, product_cli, _ = self._current_product()
         summary = (
             f"Umgebung:      {self.env_var.get()}\n"
             f"Verzeichnis:   {self.input_dir_var.get().strip()}\n"
@@ -472,6 +550,12 @@ class RapidMappingApp(tk.Tk):
             f"TimeStamp:     {self.timestamp_var.get().strip()}\n"
             f"STAC-Upload:   {'aktiv' if self.upload_var.get() else 'AUS (nur lokal in ./output/)'}\n"
         )
+        if product_cli == "qdop-dmc4":
+            compress = self.cog_compress_var.get()
+            cog_line = f"COG-Kompression: {compress}"
+            if compress.upper() == "JPEG":
+                cog_line += f" (Qualität {self._cog_quality_value()})"
+            summary += cog_line + "\n"
         if not messagebox.askyesno("Verarbeitung starten?", summary + "\nJetzt starten?"):
             return
 
@@ -483,6 +567,8 @@ class RapidMappingApp(tk.Tk):
             "last_product": self._current_product()[1],
             "last_proxy_mode": self.proxy_var.get().strip(),
             "osgeo_python": self.interp_var.get().strip(),
+            "last_cog_compress": self.cog_compress_var.get(),
+            "last_cog_quality": self._cog_quality_value(),
         })
 
         self.runner = ProcessRunner()

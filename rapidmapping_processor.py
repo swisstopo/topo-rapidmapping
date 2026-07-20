@@ -34,7 +34,9 @@ from configuration import (
     STAC_COLLECTION,
     GEOCAT_ID,
     STAC_SCHEME,
-    STAC_API_PATH
+    STAC_API_PATH,
+    COG_CONFIG,
+    COG_COMPRESS_OPTIONS
 )
 from utilities.file_handler import (
     validate_directory,
@@ -386,6 +388,8 @@ def process_mosaic_workflow(
 def process_dmc4_workflow(
     input_dir, timestamp, upload_enabled, environment, hostname,
     debug: bool = False,
+    cog_compress: str = COG_CONFIG['compress'],
+    cog_quality: int = COG_CONFIG['quality'],
 ):
     """
     Workflow für DMC4 4-Kanal Bildstreifen.
@@ -399,7 +403,7 @@ def process_dmc4_workflow(
          - RGB: Bänder 1, 2, 3
          - NRG: Bänder 4, 1, 2 (Nahinfrarot, Rot, Grün)
       3. VRT-Mosaike bauen (RGB + NRG)
-      4. Als COG konvertieren
+      4. Als COG konvertieren (COMPRESS/QUALITY manuell wählbar, Output immer 8-Bit)
       5. Thumbnail aus RGB-COG erstellen
       6. RGB-COG, NRG-COG und Thumbnail ins gleiche STAC-Item hochladen
     """
@@ -490,6 +494,12 @@ def process_dmc4_workflow(
             logger.info("✓ VRT-Mosaike erstellt")
 
             # Step 3: convert VRTs to COG (nodata preserved)
+            # COMPRESS ist im GUI/CLI wählbar; QUALITY greift nur bei COMPRESS=JPEG.
+            # Output ist immer 8-Bit (-ot Byte), unabhängig von der Compression-Wahl.
+            _cog_co = ["-co", f"COMPRESS={cog_compress}"]
+            if cog_compress.upper() == "JPEG":
+                _cog_co += ["-co", f"QUALITY={cog_quality}"]
+
             for label, vrt_name, cog in [
                 ("RGB", "mosaic_rgb.vrt", cog_rgb),
                 ("NRG", "mosaic_nrg.vrt", cog_nrg),
@@ -497,8 +507,9 @@ def process_dmc4_workflow(
                 if not _run_gdal(
                     f"COG {label}: {cog.name}",
                     ["gdal_translate", "-of", "COG",
-                     "-co", "COMPRESS=JPEG", "-co", "QUALITY=75",
+                     *_cog_co,
                      "-co", "BIGTIFF=YES",
+                     "-ot", "Byte",
                      "-a_nodata", "0",
                      str(tmp / vrt_name), str(cog)],
                     output_path=cog
@@ -745,7 +756,21 @@ def main():
                               '"system" (nur System-Proxy/Bundesnetz), '
                               'oder Proxy-Name aus proxy_config.json (z.B. "BVCOL")'))
 
+    # COG-Erzeugung (nur wirksam bei qdop-dmc4 — einziger Workflow, der selbst
+    # einen COG via gdal_translate erzeugt; QDOP-RGB/NRG erwarten ein bereits
+    # fertiges COG als Input)
+    parser.add_argument('--cog-compress', dest='cog_compress', default=COG_CONFIG['compress'],
+                        choices=COG_COMPRESS_OPTIONS,
+                        help=f"COG COMPRESS-Verfahren (default: {COG_CONFIG['compress']})")
+    parser.add_argument('--cog-quality', dest='cog_quality', type=int, default=COG_CONFIG['quality'],
+                        metavar='1-100',
+                        help=f"JPEG-Qualität, nur bei --cog-compress JPEG (default: {COG_CONFIG['quality']})")
+
     args = parser.parse_args()
+
+    if not (1 <= args.cog_quality <= 100):
+        logger.error(f"✗ --cog-quality muss zwischen 1 und 100 liegen (erhalten: {args.cog_quality})")
+        return 1
     # True wenn Produkt/Input/Timestamp allesamt via CLI übergeben wurden —
     # steuert sowohl das Überspringen der interaktiven Prompts als auch der
     # abschliessenden [j/N]-Bestätigung.
@@ -909,7 +934,9 @@ def main():
                 success = process_dmc4_workflow(
                     input_dir, timestamp_or_date,
                     args.upload, environment, hostname,
-                    debug=args.debug
+                    debug=args.debug,
+                    cog_compress=args.cog_compress,
+                    cog_quality=args.cog_quality
                 )
             else:
                 success = process_photos_workflow(

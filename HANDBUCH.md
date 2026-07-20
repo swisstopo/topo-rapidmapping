@@ -172,6 +172,7 @@ Es öffnet sich ein Fenster **"Rapid Mapping — STAC Import Tool"**.
 | **Umgebung** | `INT (Test)` oder `PROD (produktiv)`. Faustregel: im Zweifel zuerst INT testen, dann PROD. |
 | **Input-Verzeichnis** | Über **Durchsuchen…** wählen oder Pfad eintippen. Rot umrandet, solange der Pfad nicht existiert. |
 | **Produkttyp** | Dropdown: EBN, EBO, QDOP RGB, QDOP NRG, QDOP-DMC4. |
+| **COG-Kompression / Qualität** | Erscheint nur bei Produkttyp **QDOP-DMC4** (einziger Workflow, der selbst einen COG erzeugt). COMPRESS-Verfahren wählbar (Standard JPEG); Qualität nur bei COMPRESS=JPEG editierbar (Standard 75). Output ist immer 8-Bit. |
 | **Datum / Zeitstempel** | Beschriftung und erwartetes Format passen sich automatisch dem Produkttyp an (siehe Hinweistext direkt unter dem Feld). Rot umrandet bei ungültigem Format. |
 | **STAC-Upload aktiv** | Ausschalten für einen Testlauf ohne Upload (Ergebnis landet lokal in `./output/`). |
 | **Debug-Modus** | Sequentielle Verarbeitung mit ausführlicherem Log — nur bei Problemsuche aktivieren, sonst aus lassen (schneller). |

@@ -170,3 +170,6 @@ rclone/
 
 # GUI: lokal persistierte Einstellungen (Theme, letztes Verzeichnis)
 gui_config.json
+
+# .exe in Root
+rapidmapping_processor.exe

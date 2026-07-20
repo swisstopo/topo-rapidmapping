@@ -246,7 +246,11 @@ pip install requests-negotiate-sspi
 
 Voraussetzung: Windows, am Active-Directory-Domain angemeldet.
 
-## Verwendung
+
+
+
+
+## C Verwendung
 
 ### GUI (empfohlen)
 
@@ -275,6 +279,7 @@ Felder:
 | STAC-Upload | `--upload` |
 | Debug-Modus | `--debug` |
 | Netzwerk-Modus (Dropdown) | `--proxy` |
+| COG-Kompression/Qualität (nur bei QDOP-DMC4 sichtbar) | `--cog-compress` / `--cog-quality` |
 
 - **Start-Button bleibt deaktiviert**, bis Verzeichnis, Zeitstempel-Format
   (abhängig vom gewählten Produkttyp) und — falls Upload aktiv — vorhandene
@@ -451,6 +456,8 @@ Asset: ram-2024-07-15t23595900-ebn.txt
    └─ Alle NRG-Streifen → mosaic_nrg.vrt
 
 4. COG-Konvertierung (gdal_translate -of COG)
+   ├─ COMPRESS/QUALITY wählbar via GUI oder --cog-compress/--cog-quality
+   │  (default: COMPRESS=JPEG, QUALITY=75), Output immer 8-Bit (-ot Byte)
    ├─ mosaic_rgb.vrt → ram-YYYY-MM-DDthhmmsscc-qdop-rgb-mosaic.tif
    └─ mosaic_nrg.vrt → ram-YYYY-MM-DDthhmmsscc-qdop-nrg-mosaic.tif
 
@@ -946,6 +953,8 @@ python rapidmapping_processor.py --proxy BVCOL  --product ebn --input /data --ti
 | `--upload` | `True` / `False` | Upload zu STAC (False → ./output/) |
 | `--prod` | Flag | Produktionsumgebung (default: INT) |
 | `--debug` | Flag | Sequentiell + volles Logging |
+| `--cog-compress` | `JPEG`, `LZW`, `DEFLATE`, `ZSTD`, `WEBP`, `NONE` | COG COMPRESS-Verfahren (default: `JPEG`). Wirkt nur bei `--product qdop-dmc4` — einziger Workflow, der selbst einen COG via `gdal_translate` erzeugt. Output ist immer 8-Bit. |
+| `--cog-quality` | `1`–`100` | JPEG-Qualität, nur wirksam bei `--cog-compress JPEG` (default: `75`) |
 
 ### Debug-Modus direkt im Code setzen
 

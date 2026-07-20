@@ -18,6 +18,8 @@ _DEFAULTS: Dict[str, Any] = {
     "last_product": "",
     "last_proxy_mode": "auto",
     "osgeo_python": "",
+    "last_cog_compress": "JPEG",
+    "last_cog_quality": 75,
 }
 
 

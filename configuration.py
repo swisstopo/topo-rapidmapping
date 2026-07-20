@@ -23,13 +23,20 @@ COLLECTION_BASE_URL = "https://data.geo.admin.ch/ch.swisstopo.rapidmapping/data/
 PREFIX = "ram"  # Rapid Mapping Prefix
 
 # COG Creation Settings
+# 'compress'/'quality' sind Default-Werte — im GUI für alle Produkttypen
+# ausser EBN/EBO manuell überschreibbar (--cog-compress / --cog-quality).
+# Output ist immer 8-Bit (-ot Byte), unabhängig von der Compression-Wahl.
 COG_CONFIG = {
     'compress': 'JPEG',
     'quality': 75,
     'blocksize': 256,
     'bigtiff': 'YES',
-    'num_threads': 'ALL_CPUS'
+    'num_threads': 'ALL_CPUS',
+    'output_type': 'Byte'
 }
+
+# Im GUI/CLI wählbare COMPRESS-Verfahren für die COG-Erzeugung.
+COG_COMPRESS_OPTIONS = ['JPEG', 'LZW', 'DEFLATE', 'ZSTD', 'WEBP', 'NONE']
 
 # Mosaic Creation Settings
 MOSAIC_CONFIG = {

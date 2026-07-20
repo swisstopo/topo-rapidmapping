@@ -64,7 +64,7 @@ rapidmapping_processor/
 
 ## A - Installation
 
-### 1.1 GDAL-Tools installieren (kommt mit QGIS, meist bereits installiert)
+### GDAL-Tools installieren (kommt mit QGIS, meist bereits installiert)
 
 #### Windows (OSGeo4W Shell)
 1. Download: https://trac.osgeo.org/osgeo4w/
@@ -82,27 +82,7 @@ sudo apt update
 sudo apt install gdal-bin python3-gdal
 ```
 
-### 1.2 .EXE (1. Wahl / empfohlen)
-
-#### Windows (OSGeo4W Shell)
-1. Kopiere Secrets Folder und dist/rapidmapping_processor.exe in das gleiche Verezeichnis
-2. Führe Script in OSGeo4W Shell aus
-```bash
-rapidmapping_processor.exe
-```
-
-### 1.3 GUI via Python (2. Wahl)
-
-#### GUI starten mit OSGeo4W (QGIS Python):
-```bash
-# Kopiere Secrets Folder und dist/rapidmapping_processor.exe in C:/LegacySW/topo-rapidmapping
-# Win-Taste + "cmd" starten.
-# cmd-Terminal öffnet sich
-# Terminal: cd /d C:/LegacySW/topo-rapidmapping (enter)
-# Terminal: python 0_GUI_rapidmapping_STACimport.py (enter)
-```
-
-### 1.4 Python Virtual Environment (3. Wahl)
+### 1. Python Virtual Environment (optional)
 
 #### Mit QGIS Python:
 ```bash
@@ -250,9 +230,29 @@ Voraussetzung: Windows, am Active-Directory-Domain angemeldet.
 
 
 
-## C Verwendung
+# C Verwendung
 
-### GUI (empfohlen)
+### 1.2 .EXE (1. Wahl / empfohlen)
+
+#### Windows (OSGeo4W Shell)
+1. Kopiere Secrets Folder und dist/rapidmapping_processor.exe in das gleiche Verezeichnis
+2. Führe Script in OSGeo4W Shell aus
+```bash
+rapidmapping_processor.exe
+```
+
+### 1.3 GUI via Python (2. Wahl)
+
+#### GUI starten mit OSGeo4W (Python):
+
+1. Kopiere Secrets Folder und dist/rapidmapping_processor.exe in C:/LegacySW/topo-rapidmapping
+2. Win-Taste + "cmd"
+3. cmd-Terminal öffnet sich
+
+```bash
+# Terminal: cd /d C:/LegacySW/topo-rapidmapping (enter)
+# Terminal: python 0_GUI_rapidmapping_STACimport.py (enter)
+```
 
 ```bash cmd-Terminal
 python 0_GUI_rapidmapping_STACimport.py
@@ -260,13 +260,7 @@ python 0_GUI_rapidmapping_STACimport.py
 
 Grafische Oberfläche (Tkinter) als Alternative zum Terminal-Dialog. Startet
 `rapidmapping_processor.py`/`.exe` im Hintergrund als Subprocess.
-Mit cmd-Konsole starten:
-```bash cmd-Terminal
-cd d/ Y:/LegacySW/topo-rapidmapping
-python 0_GUI_rapidmapping_STACimport.py
-```
-Bevorzugt automatisch eine vorhandene `rapidmapping_processor.exe`-Anwendung im selben Verzeichnis, sonst wird `python
-rapidmapping_processor.py` verwendet.
+Bevorzugt automatisch eine vorhandene `rapidmapping_processor.exe`-Anwendung im selben Verzeichnis, sonst wird `python rapidmapping_processor.py` verwendet.
 
 Felder:
 

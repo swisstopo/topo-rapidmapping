@@ -2,6 +2,10 @@
 
 Automatisiertes System für die Publikation von Rapid Mapping Daten auf der FSDI STAC Plattform.
 
+## GUI 
+
+<img width="437" height="591" alt="image" src="https://github.com/user-attachments/assets/476bac3a-e86e-4a78-b737-41971510f01d" />
+
 ## Übersicht
 
 Dieses Tool vereint die Funktionalität von:

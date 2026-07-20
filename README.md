@@ -2,10 +2,6 @@
 
 Automatisiertes System für die Publikation von Rapid Mapping Daten auf der FSDI STAC Plattform.
 
-## GUI
-
-<img width="437" height="374" alt="image" src="https://github.com/user-attachments/assets/23f50eb4-bfe5-46df-915d-34e279788f06" />
-
 ## Übersicht
 
 Dieses Tool vereint die Funktionalität von:
@@ -96,10 +92,10 @@ rapidmapping_processor.exe
 #### GUI starten mit OSGeo4W (QGIS Python):
 ```bash
 # Kopiere Secrets Folder und dist/rapidmapping_processor.exe in C:/LegacySW/topo-rapidmapping
-# Win-Taste + "OSGeo4W" Shell starten.
-# OSGeo4W-Terminal öffnet sich
+# Win-Taste + "cmd" starten.
+# cmd-Terminal öffnet sich
 # Terminal: cd /d C:/LegacySW/topo-rapidmapping (enter)
-# Terminal: python "0_GUI_rapidmapping_STACimport.py" (enter)
+# Terminal: python 0_GUI_rapidmapping_STACimport.py (enter)
 ```
 
 ### 1.4 Python Virtual Environment (3. Wahl)

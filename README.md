@@ -258,7 +258,7 @@ Grafische Oberfläche (Tkinter) als Alternative zum Terminal-Dialog. Startet
 `rapidmapping_processor.py`/`.exe` im Hintergrund als Subprocess.
 Mit cmd-Konsole starten:
 ```bash cmd-Terminal
-cd d/ Y/LegacySW/topo-rapidmapping
+cd d/ Y:/LegacySW/topo-rapidmapping
 python 0_GUI_rapidmapping_STACimport.py
 ```
 Bevorzugt automatisch eine vorhandene `rapidmapping_processor.exe`-Anwendung im selben Verzeichnis, sonst wird `python

@@ -4,7 +4,7 @@ Automatisiertes System für die Publikation von Rapid Mapping Daten auf der FSDI
 
 ## GUI 
 
-<img width="436" height="385" alt="image" src="https://github.com/user-attachments/assets/77884a62-ff4c-4880-8931-83193a1dbcae" />
+<img width="435" height="372" alt="image" src="https://github.com/user-attachments/assets/0e69e8ef-049e-4333-841d-81269497c295" />
 
 ## Übersicht
 

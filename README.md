@@ -232,7 +232,7 @@ Voraussetzung: Windows, am Active-Directory-Domain angemeldet.
 
 # C Verwendung
 
-### 1.2 .EXE (1. Wahl / empfohlen)
+### 1 .EXE (1. Wahl / empfohlen)
 
 #### Windows (OSGeo4W Shell)
 1. Kopiere Secrets Folder und dist/rapidmapping_processor.exe in das gleiche Verezeichnis
@@ -241,11 +241,11 @@ Voraussetzung: Windows, am Active-Directory-Domain angemeldet.
 rapidmapping_processor.exe
 ```
 
-### 1.3 GUI via Python (2. Wahl)
+### 2 GUI via Python (GUI Option)
 
-#### GUI starten mit OSGeo4W (Python):
+#### GUI starten mit cmd-Terminal (Python):
 
-1. Kopiere Secrets Folder und dist/rapidmapping_processor.exe in C:/LegacySW/topo-rapidmapping
+1. Kopiere Secrets Folder und dist/rapidmapping_processor.exe in C:/LegacySW/topo-rapidmapping (Root Ordner)
 2. Win-Taste + "cmd"
 3. cmd-Terminal öffnet sich
 

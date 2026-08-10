@@ -34,6 +34,11 @@ from gui import config as gui_config  # noqa: E402
 from gui.runner import ProcessRunner, detect_osgeo_python  # noqa: E402
 from gui.theme import DARK, LIGHT, apply_theme, set_titlebar_dark  # noqa: E402
 
+# ttk.Spinbox gibt es erst ab Python 3.7 — auf 3.6 (noch im Einsatz) auf das
+# klassische tk.Spinbox zurückfallen, das dieselben Kern-Optionen unterstützt.
+_HAS_TTK_SPINBOX = hasattr(ttk, "Spinbox")
+Spinbox = ttk.Spinbox if _HAS_TTK_SPINBOX else tk.Spinbox
+
 # (Anzeige-Label, CLI-Wert, Zeitstempel-Format: "date" YYYY-MM-DD oder "timestamp" YYYY-MM-DDthhmmss[cc])
 PRODUCTS = [
     ("EBN — Einzelbilder Nadir",              "ebn",       "date"),
@@ -170,7 +175,7 @@ class RapidMappingApp(tk.Tk):
         self.cog_quality_label = ttk.Label(cog_frame, text="Qualität:")
         self.cog_quality_label.pack(side="left", padx=(14, 4))
         self.cog_quality_var = tk.StringVar(value=str(COG_CONFIG['quality']))
-        self.cog_quality_spin = ttk.Spinbox(
+        self.cog_quality_spin = Spinbox(
             cog_frame, textvariable=self.cog_quality_var,
             from_=1, to=100, width=5
         )
@@ -287,6 +292,14 @@ class RapidMappingApp(tk.Tk):
             )
         except Exception:
             pass
+        if not _HAS_TTK_SPINBOX:
+            # tk.Spinbox-Fallback (Python 3.6): ttk.Style greift hier nicht,
+            # Farben müssen direkt gesetzt werden.
+            self.cog_quality_spin.configure(
+                bg=T["input"], fg=T["fg"], insertbackground=T["fg"],
+                buttonbackground=T["btn"], highlightthickness=0,
+                relief="flat", disabledbackground=T["panel"],
+            )
         set_titlebar_dark(self, self._dark)
         # DWM übernimmt die Titelleisten-Farbe manchmal erst, nachdem das
         # Fenster tatsächlich sichtbar ist (beim ersten Start vor mainloop()

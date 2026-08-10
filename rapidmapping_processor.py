@@ -16,6 +16,7 @@ Usage:
 """
 
 import argparse
+import io
 import logging
 import re
 import sys
@@ -50,6 +51,32 @@ from utilities.proxy_handler import initialize_proxy, get_configured_proxy_names
 from utilities.credentials import load_stac_credentials
 from utilities.gdal_helpers import GDAL_PERF_FLAGS, supports_progress
 # publish_to_stac importiert lazy (verhindert circular import)
+
+# Windows: ist stdout/stderr nicht an eine echte Konsole angehängt (z.B. wenn
+# das GUI diesen Prozess über eine Pipe ausliest), fällt Python auf die
+# ANSI-Codepage zurück (meist cp1252). Fortschrittsbalken-Zeichen (█ ░ ✓ ...)
+# lassen sich damit nicht kodieren -> UnicodeEncodeError bricht die
+# Verarbeitung ab, obwohl Upload etc. bereits erfolgreich waren. UTF-8 mit
+# Ersatzzeichen-Fallback erzwingen, unabhängig davon, wie/womit der Prozess
+# gestartet wurde (Konsole, GUI-Subprocess, PYTHONIOENCODING gesetzt oder nicht).
+# TextIOWrapper.reconfigure() gibt es erst ab Python 3.7 — falls nicht
+# vorhanden (Python 3.6), stdout/stderr manuell um den Rohbuffer neu wrappen.
+for _name in ("stdout", "stderr"):
+    _stream = getattr(sys, _name)
+    if hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+            continue
+        except Exception:
+            pass
+    _buffer = getattr(_stream, "buffer", None)
+    if _buffer is not None:
+        try:
+            setattr(sys, _name, io.TextIOWrapper(
+                _buffer, encoding="utf-8", errors="replace", line_buffering=True
+            ))
+        except Exception:
+            pass
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)

@@ -46,6 +46,7 @@ changes to the original:
 
 import argparse
 import hashlib
+import io
 import json
 import os
 import sys
@@ -61,6 +62,29 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry  # pylint: disable=import-error
 
 logger = logging.getLogger(__name__)
+
+# Windows: ist stdout nicht an eine echte Konsole angehängt (z.B. Pipe/GUI-
+# Subprocess), fällt Python auf die ANSI-Codepage zurück (meist cp1252), die
+# die Fortschrittsbalken-Zeichen (█ ░ ✓ ...) unten in _generate_hashes() nicht
+# kodieren kann -> UnicodeEncodeError, obwohl der Upload selbst erfolgreich war.
+# TextIOWrapper.reconfigure() gibt es erst ab Python 3.7 — falls nicht
+# vorhanden (Python 3.6), stdout/stderr manuell um den Rohbuffer neu wrappen.
+for _name in ("stdout", "stderr"):
+    _stream = getattr(sys, _name)
+    if hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+            continue
+        except Exception:
+            pass
+    _buffer = getattr(_stream, "buffer", None)
+    if _buffer is not None:
+        try:
+            setattr(sys, _name, io.TextIOWrapper(
+                _buffer, encoding="utf-8", errors="replace", line_buffering=True
+            ))
+        except Exception:
+            pass
 
 # Lock: sys.argv is global — parallel workers must not mutate it simultaneously
 import threading as _threading

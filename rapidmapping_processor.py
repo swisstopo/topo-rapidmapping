@@ -625,6 +625,7 @@ def process_photos_workflow(
             environment=environment,
             upload_enabled=upload_enabled,
             debug=debug,
+            date_override=date,
         )
 
         if not result:

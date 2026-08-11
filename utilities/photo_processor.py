@@ -1170,6 +1170,36 @@ def parse_exif_timestamp(exif_timestamp: Optional[str], photo_name: str) -> Opti
     return None
 
 
+def apply_date_override(timestamp: str, date_override: Optional[str], photo_name: str) -> str:
+    """
+    Ersetzt Jahr-Monat-Tag im Timestamp durch das im GUI/CLI eingegebene
+    TimeStamp-Datum, falls dieses vom (aus EXIF oder Dateiname ermittelten)
+    Datum abweicht. Uhrzeit + Hundertstel-Suffix bleiben unverändert aus der
+    Bildquelle.
+
+    Args:
+        timestamp (str): "YYYY-MM-DDthhmmsscc", ermittelt aus EXIF/Dateiname
+        date_override (Optional[str]): eingegebenes Datum "YYYY-MM-DD", oder None
+        photo_name (str): Dateiname fürs Logging
+
+    Returns:
+        str: Timestamp, ggf. mit überschriebenem Datum
+    """
+    if not date_override:
+        return timestamp
+
+    source_date = timestamp[:10]
+    if source_date == date_override:
+        return timestamp
+
+    logger.info(
+        f"  ℹ Datum überschrieben ({photo_name}): "
+        f"Bild {source_date} → TimeStamp-Eingabe {date_override} "
+        f"(Uhrzeit {timestamp[11:]} aus Bild übernommen)"
+    )
+    return date_override + timestamp[10:]
+
+
 def dms_to_decimal(degrees: float, minutes: float, seconds: float, direction: str) -> float:
     decimal = degrees + minutes / 60 + seconds / 3600
     if direction in ['S', 'W']:
@@ -1354,6 +1384,7 @@ def process_individual_photos(
     environment: str,
     upload_enabled: bool = True,
     debug: bool = False,
+    date_override: Optional[str] = None,
 ) -> Optional[Dict]:
     """
     Verarbeitet alle Photos in einem Verzeichnis.
@@ -1361,6 +1392,10 @@ def process_individual_photos(
     Args:
         debug: True → sequentielle Verarbeitung mit vollem Logging (für Debugging).
                False → parallele Konvertierung + Upload (Produktion, Standard).
+        date_override: im GUI/CLI eingegebenes Datum "YYYY-MM-DD" (EBN/EBO).
+               Ersetzt Jahr-Monat-Tag im Item-/Asset-Namen, falls es vom
+               EXIF-/Dateinamen-Datum abweicht — die Uhrzeit stammt weiterhin
+               immer aus dem Bild. Siehe apply_date_override().
 
     Parallele Verarbeitung via ThreadPoolExecutor wenn debug=False.
     """
@@ -1524,6 +1559,7 @@ def process_individual_photos(
                         ms_part   = '00'
                     jpg_stem = f"{tif.stem}_{time_part}_{ms_part}"
                     timestamp = dt.strftime("%Y-%m-%dt%H%M%S").lower() + ms_part
+                    timestamp = apply_date_override(timestamp, date_override, tif.name)
 
                     work_items.append({
                         'source_path':   tif,
@@ -1636,6 +1672,7 @@ def process_individual_photos(
                                 'error': 'no timestamp', 'skipped_no_timestamp': True,
                                 'photo_upload_success': False, 'thumbnail_upload_success': False,
                                 'lat': lat, 'lon': lon}
+                    timestamp  = apply_date_override(timestamp, date_override, jpg_file.name)
                     item_name  = generate_item_name(timestamp, product_type)
                     asset_name = f"{item_name}-{get_product_config(product_type)['suffix']}"
 

@@ -21,6 +21,7 @@ in einem einzigen, benutzerfreundlichen Workflow mit automatischer Proxy-Erkennu
 - **DMC4-Workflow (QDOP)**: Verarbeitet 4-Kanal DMC4-Bildstreifen automatisch zu RGB + NRG COG
 - **Automatische Proxy-Erkennung**: VPN- und Corporate-Proxy-Support mit SSL-Handling
 - **EXIF-Extraktion für (EBN, EBO)**: GPS und Zeitstempel aus Einzelbildern
+- **EBN/EBO Datums-Override**: Weicht das EXIF-Datum eines Fotos vom eingegebenen TimeStamp-Datum ab, wird für Item-/Asset-Name das eingegebene Datum verwendet — die Uhrzeit stammt weiterhin aus dem Foto
 - **KML-Overview (EBN, EBO)**: Automatische Generierung via STAC-Abfrage nach Upload
 - **Multi-Environment**: INT und PROD-Support
 - **Batch-Upload**: Einzelbilder werden sequenziell hochgeladen
@@ -428,6 +429,26 @@ Asset: ram-2024-07-15t23595900-ebn.txt
 - **DMS → Dezimal-Konvertierung** (6 Dezimalstellen Präzision)
 - **Warnung bei fehlenden GPS-Daten**: Foto wird übersprungen
 - **KML**: Nur Fotos mit GPS-Daten werden eingebunden
+
+#### Datum: TimeStamp-Eingabe vs. EXIF
+
+Das im GUI/CLI eingegebene `TimeStamp`-Feld ist bei EBN/EBO nur ein **Datum**
+(`YYYY-MM-DD`, kein Uhrzeitanteil). Für Item-/Asset-Name gilt pro Foto:
+
+- **Jahr-Monat-Tag**: immer vom eingegebenen TimeStamp — auch dann, wenn das
+  aus EXIF (`DateTimeOriginal`) bzw. als Fallback aus dem Dateinamen
+  ermittelte Datum abweicht.
+- **Stunde-Minute-Sekunde**: immer aus dem Foto (EXIF bzw. Dateiname),
+  unverändert.
+
+Jede Abweichung wird pro Foto im Log protokolliert, z. B.:
+```
+ℹ Datum überschrieben (IMG_0231.jpg): Bild 2025-07-10 → TimeStamp-Eingabe 2025-07-11 (Uhrzeit 08:00:28 aus Bild übernommen)
+```
+
+Hintergrund: Die Kamera-Uhr läuft manchmal falsch oder driftet über eine
+Tagesgrenze; das im Feld eingegebene Datum entspricht dem tatsächlichen
+Flug-/Aufnahmedatum und soll deshalb für die STAC-Benennung massgebend sein.
 
 ### 3. QDOP-DMC4 (4-Kanal DMC4-Bildstreifen)
 
@@ -1136,6 +1157,9 @@ Bei Problemen:
 MIT
 
 ## Version History
+
+### v2.5 (2026-08)
+- **EBN/EBO Datums-Override**: Weicht das EXIF-/Dateinamen-Datum eines Fotos vom eingegebenen TimeStamp-Datum ab, wird für Item-/Asset-Name das eingegebene Datum verwendet (Jahr-Monat-Tag); die Uhrzeit stammt weiterhin aus dem Foto. Jede Überschreibung wird pro Foto geloggt (siehe [Datum: TimeStamp-Eingabe vs. EXIF](#datum-timestamp-eingabe-vs-exif))
 
 ### v2.4 (2026-07)
 - **GUI**: Neue grafische Oberfläche `0_GUI_rapidmapping_STACimport.py` (Tkinter) als Alternative zum Terminal-Dialog — live validierte Formularfelder, Bestätigungsdialog, echter Abbrechen-Button, Live-Log mit korrekt aktualisierten Fortschrittsbalken, Hell/Dunkel-Theme (Standard: Dunkel)

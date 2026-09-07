@@ -4,14 +4,12 @@ Individual Photo Processing mit subprocess (GDAL command-line tools).
 Verarbeitet Einzelbilder (Nadir/Oblique) - EXIF-Extraktion und Thumbnail-Erstellung.
 Basiert auf dem ursprünglichen rm_publish_einzelbilder.py Ansatz.
 
-ÄNDERUNGEN:
 - Kopiert Original-Foto in temp_dir und benennt gemäß Asset-Definition um
 - Upload erfolgt DIREKT nach Verarbeitung jedes Fotos (vor photos.append)
 - Verwendet ausschließlich proxy_handler.py für Proxy-Verwaltung
-- NEU v2.1: TIF-zu-JPEG Konvertierung für EBN/EBO mit GPS-EXIF aus GeoTransform
-- NEU v2.2: Nord-oben Normalisierung via GeoTransform-Rotation (Solution B)
-- NEU v2.2: Sequentielle ms-Offsets für Burst-Bilder mit identischem Timestamp
-- NEU v2.2: Pro-Timestamp ein repräsentatives Bild auswählen → convert+upload sofort
+- TIF-zu-JPEG Konvertierung für EBN/EBO mit GPS-EXIF aus GeoTransform
+- Nord-oben Normalisierung via GeoTransform-Rotation (Solution B)
+- Sequentielle ms-Offsets für Burst-Bilder mit identischem Timestamp
 """
 
 import os
@@ -28,6 +26,7 @@ from typing import Optional, Dict, List, Tuple
 from datetime import datetime
 from configuration import THUMBNAIL_CONFIG, ProductType, generate_item_name, generate_asset_name, get_product_config
 from utilities.file_handler import get_jpg_files
+from utilities.gdal_helpers import GDAL_PERF_FLAGS
 # publish_to_stac wird lazy importiert (innerhalb der Funktion) um zirkuläre
 # Imports zu vermeiden: util_publish_stac_fsdi → utilities → photo_processor
 
@@ -212,7 +211,7 @@ def _fast_tiff_to_gdalinfo_text(path: Path) -> str:
 
 
 # ==============================================================================
-# TIF → JPEG KONVERTIERUNG (NEU v2.1)
+# TIF → JPEG KONVERTIERUNG
 # ==============================================================================
 
 def _parse_geotransform_center(gdalinfo_output: str) -> Tuple[Optional[float], Optional[float]]:
@@ -279,7 +278,7 @@ def _parse_tifftag_datetime(gdalinfo_output: str) -> Optional[str]:
 
 
 # ==============================================================================
-# NEU v2.2 — FIX 1: NORD-OBEN NORMALISIERUNG (Solution B)
+# NORD-OBEN NORMALISIERUNG (Solution B)
 # ==============================================================================
 
 def _geotransform_rotation_deg(gdalinfo_output: str) -> Optional[float]:
@@ -352,8 +351,7 @@ def _rotate_to_north_up(jpg_path: Path, angle_deg: float, quality: int = 85) -> 
         result = subprocess.run(
             [
                 'gdalwarp',
-                '--config', 'NUM_THREADS', 'ALL_CPUS',
-                '--config', 'GDAL_CACHEMAX', '512',
+                *GDAL_PERF_FLAGS,
                 '-multi',
                 '-wm', '512',
                 '-of', 'JPEG',
@@ -387,7 +385,7 @@ def _rotate_to_north_up(jpg_path: Path, angle_deg: float, quality: int = 85) -> 
 
 
 # ==============================================================================
-# NEU v2.3 — MINIMALE DATEIAUSWAHL FÜR FLÄCHENDECKUNG (Greedy Set Cover)
+# MINIMALE DATEIAUSWAHL FÜR FLÄCHENDECKUNG (Greedy Set Cover)
 # Exakte Polygon-Footprints aus Corner Coordinates — korrekt für gedrehte Bilder
 # ==============================================================================
 
@@ -593,7 +591,7 @@ def select_minimal_coverage_files(
 
 
 # ==============================================================================
-# NEU v2.2 — FIX 2: SEQUENTIELLE MS-OFFSETS FÜR BURST-TIMESTAMPS
+# SEQUENTIELLE MS-OFFSETS FÜR BURST-TIMESTAMPS
 # ==============================================================================
 
 def _assign_sequential_ms_offsets(
@@ -802,13 +800,12 @@ def convert_tif_to_jpg_with_exif(
     Konvertiert ein georeferenziertes GeoTIFF (EBN/EBO) zu JPEG und schreibt
     GPS-EXIF aus den Center-Koordinaten des GeoTransform.
 
-    NEU v2.2:
-      - Rotation wird aus GeoTransform erkannt und korrigiert:
-          * 180°-Flip (nord-unten): direkt via -a_ullr in gdal_translate (verlustfrei)
-          * Beliebiger Winkel:      via gdalwarp nach gdal_translate (Solution B)
-      - dt_str_override: optionaler Timestamp mit ms-Offset aus _assign_sequential_ms_offsets
-        (Format "YYYY:MM:DD HH:MM:SS:NN"); EXIF erhält nur [:19], Item-Name den vollen String
-      - gdalinfo_text: gecachter gdalinfo-Output (vermeidet doppelten Prozessaufruf)
+    - Rotation wird aus GeoTransform erkannt und korrigiert:
+        * 180°-Flip (nord-unten): direkt via -a_ullr in gdal_translate (verlustfrei)
+        * Beliebiger Winkel:      via gdalwarp nach gdal_translate (Solution B)
+    - dt_str_override: optionaler Timestamp mit ms-Offset aus _assign_sequential_ms_offsets
+      (Format "YYYY:MM:DD HH:MM:SS:NN"); EXIF erhält nur [:19], Item-Name den vollen String
+    - gdalinfo_text: gecachter gdalinfo-Output (vermeidet doppelten Prozessaufruf)
 
     Workflow:
       1. gdalinfo  → Koordinaten + Datum + Rotationswinkel
@@ -859,7 +856,7 @@ def convert_tif_to_jpg_with_exif(
     else:
         logger.warning(f"    ! Kein TIFFTAG_DATETIME gefunden")
 
-    # Rotationswinkel bestimmen (NEU v2.2)
+    # Rotationswinkel bestimmen
     rotation_deg = _geotransform_rotation_deg(gdalinfo_text)
 
     # ------------------------------------------------------------------
@@ -954,8 +951,7 @@ def convert_tif_to_jpg_with_exif(
             warp_result = subprocess.run(
                 [
                     'gdalwarp',
-                    '--config', 'NUM_THREADS', 'ALL_CPUS',
-                    '--config', 'GDAL_CACHEMAX', '512',
+                    *GDAL_PERF_FLAGS,
                     '-multi',
                     '-wm', '512',
                     '-of', 'JPEG',
@@ -1008,8 +1004,7 @@ def convert_tif_to_jpg_with_exif(
         translate_result = subprocess.run(
             [
                 'gdal_translate',
-                '--config', 'NUM_THREADS', 'ALL_CPUS',
-                '--config', 'GDAL_CACHEMAX', '512',
+                *GDAL_PERF_FLAGS,
                 '-of', 'JPEG',
                 '-co', f'QUALITY={quality}',
                 '-co', 'EXIF_THUMBNAIL=NO',
@@ -1053,124 +1048,6 @@ def convert_tif_to_jpg_with_exif(
     return jpg_path
 
 
-# ==============================================================================
-# NEU v2.2 — FIX 3: PRO-TIMESTAMP EIN REPRÄSENTATIVES BILD → SOFORT KONVERTIEREN
-# ==============================================================================
-
-def convert_tif_files_in_directory(
-    input_dir: Path,
-    output_dir: Path,
-    quality: int = 85
-) -> List[Path]:
-    """
-    Scannt alle TIF-Dateien in input_dir, wählt pro einzigartigem Timestamp
-    genau ein repräsentatives Bild aus und konvertiert dieses sofort zu JPEG.
-
-    NEU v2.2 — drei Phasen:
-
-    Phase 1 — gdalinfo für alle TIFs (gecacht, einmalig):
-      Alle Metadaten werden vorab abgerufen, um mehrfache Prozessaufrufe
-      pro Datei zu vermeiden.
-
-    Phase 2 — ms-Offsets zuweisen (_assign_sequential_ms_offsets):
-      Dateien mit identischem TIFFTAG_DATETIME werden nach den letzten zwei
-      Stem-Ziffern sortiert und erhalten sequentielle Offsets :01, :02, ...
-
-    Phase 3 — Auswahl + Sofort-Konvertierung:
-      Pro Timestamp-Gruppe wird nur die erste Datei (Offset :01 bzw. kein
-      Offset bei eindeutigem Timestamp) konvertiert. Weitere Burst-Frames
-      (:02, :03, ...) werden übersprungen.
-      Konvertierung erfolgt sofort nach Auswahl, nicht gebatcht.
-
-    Vorteile:
-      - Keine redundanten Konvertierungen von Burst-Duplikaten
-      - Keine stillen STAC-Item-Überschreibungen durch Timestamp-Kollisionen
-      - Weniger temporärer Speicherbedarf
-
-    Args:
-        input_dir:  Quellverzeichnis mit TIF-Dateien
-        output_dir: Zielverzeichnis für JPEGs
-        quality:    JPEG-Qualität (Standard: 85)
-
-    Returns:
-        Liste der erzeugten JPEG-Dateien (eine pro einzigartigem Timestamp)
-    """
-    tif_files = sorted(
-        p for p in input_dir.iterdir()
-        if p.is_file() and p.suffix.lower() in {'.tif', '.tiff'}
-    )
-
-    if not tif_files:
-        return []
-
-    logger.info(f" Gefunden: {len(tif_files)} TIF-Datei(en) → Analysiere Timestamps...")
-
-    # ------------------------------------------------------------------
-    # PHASE 1: gdalinfo für alle Dateien (gecacht)
-    # ------------------------------------------------------------------
-    gdalinfo_cache: Dict[Path, str] = {}
-    for tif in tif_files:
-        try:
-            result = subprocess.run(
-                ['gdalinfo', str(tif)],
-                capture_output=True,
-                text=True,
-                timeout=30,
-                env={**os.environ, 'GDAL_PAM_ENABLED': 'NO'}
-            )
-            gdalinfo_cache[tif] = result.stdout if result.returncode == 0 else ''
-            if result.returncode != 0:
-                logger.warning(f" ! gdalinfo fehlgeschlagen für {tif.name}")
-        except Exception as e:
-            logger.warning(f" ! gdalinfo Fehler für {tif.name}: {e}")
-            gdalinfo_cache[tif] = ''
-
-    # ------------------------------------------------------------------
-    # PHASE 2: Sequentielle ms-Offsets zuweisen
-    # ------------------------------------------------------------------
-    ts_with_offset = _assign_sequential_ms_offsets(tif_files, gdalinfo_cache)
-
-    # Statistik
-    burst_groups = sum(1 for g in
-                       __import__('collections').Counter(
-                           ts_with_offset[t] for t in tif_files
-                       ).values() if g > 1)
-    logger.info(f" Alle {len(tif_files)} Frame(s) werden konvertiert und hochgeladen")
-
-    # ------------------------------------------------------------------
-    # PHASE 3: Alle Frames konvertieren (jeder mit eigenem ms-Offset)
-    # Burst-Frames werden NICHT übersprungen — alle erhalten eindeutige
-    # Timestamps (:01, :02, ...) und werden einzeln hochgeladen.
-    # ------------------------------------------------------------------
-    jpg_files = []
-    converted = 0
-
-    for tif in tif_files:
-        effective_ts = ts_with_offset.get(tif, '')
-        ms_match = re.search(r'^\d{4}:\d{2}:\d{2} \d{2}:\d{2}:\d{2}:(\d{2})$', effective_ts)
-        offset_str = ms_match.group(1) if ms_match else "??"
-        logger.info(f"   Frame :{offset_str} → {tif.name}")
-
-        jpg = convert_tif_to_jpg_with_exif(
-            tif_path=tif,
-            output_dir=output_dir,
-            quality=quality,
-            dt_str_override=effective_ts if effective_ts else None,
-            gdalinfo_text=gdalinfo_cache.get(tif),
-        )
-        if jpg:
-            jpg_files.append(jpg)
-            converted += 1
-        else:
-            logger.warning(f" ! Konvertierung fehlgeschlagen, überspringe: {tif.name}")
-
-    logger.info(f"  ✓ Konvertierung abgeschlossen: {converted}/{len(tif_files)} erfolgreich")
-    return jpg_files
-
-
-# ==============================================================================
-# BESTEHENDE FUNKTIONEN (unverändert)
-# ==============================================================================
 
 def generate_csv_from_stac(
     stac_url: str,
@@ -1178,6 +1055,7 @@ def generate_csv_from_stac(
     date: str,
     product_suffix: str,
     output_file: Path,
+    items: Optional[List[Dict]] = None,
 ) -> bool:
     """
     Erstellt eine CSV-Datei mit den effektiv im STAC publizierten Foto-URLs.
@@ -1196,23 +1074,31 @@ def generate_csv_from_stac(
         date (str):            Datum im Format YYYY-MM-DD
         product_suffix (str):  Produkt-Suffix z.B. "ebn", "ebo"
         output_file (Path):    Pfad zur Ausgabe-Datei
+        items (list):          Bereits abgefragte STAC-Items. Wenn gesetzt,
+                               wird keine erneute STAC-Abfrage ausgefuehrt.
 
     Returns:
-        bool: True wenn erfolgreich (auch wenn 0 URLs gefunden), False bei I/O-Fehler
+        bool: True wenn erfolgreich, False bei I/O-Fehler oder 0 gefundenen URLs
     """
-    from utilities.kml_generator import get_published_photo_urls
+    from utilities.kml_generator import extract_photo_urls, get_published_photo_urls
 
     logger.info(f"\n→ Generiere CSV aus STAC-Daten: {output_file.name}")
 
-    urls = get_published_photo_urls(
-        stac_url=stac_url,
-        collection=collection,
-        date=date,
-        product_suffix=product_suffix
-    )
+    if items is None:
+        urls = get_published_photo_urls(
+            stac_url=stac_url,
+            collection=collection,
+            date=date,
+            product_suffix=product_suffix
+        )
+    else:
+        urls = extract_photo_urls(items)
 
     if not urls:
-        logger.warning(" ! Keine publizierten URLs gefunden – leere CSV wird erstellt")
+        # Kein Teilresultat publizieren: nach erfolgreichen Uploads MUSS die
+        # STAC-Abfrage Treffer liefern. Leere Liste = fehlgeschlagene Abfrage.
+        logger.error(" ✗ Keine publizierten URLs gefunden – CSV wird NICHT erstellt")
+        return False
 
     try:
         output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1228,11 +1114,11 @@ def generate_csv_from_stac(
         return False
 
 
-def parse_exif_timestamp(exif_timestamp: Optional[str], photo_name: str) -> str:
+def parse_exif_timestamp(exif_timestamp: Optional[str], photo_name: str) -> Optional[str]:
     """
     Parsed EXIF-Timestamp zu Item-Timestamp-String.
 
-    NEU v2.2: Unterstützt das erweiterte Format mit ms-Offset:
+    Unterstützt das erweiterte Format mit ms-Offset:
       "2025:07:10 08:00:28:01"  →  "2025-07-10t08002801"
                                               ^^^^^^^^^ Sekunden + 2-stelliger Offset
 
@@ -1240,7 +1126,13 @@ def parse_exif_timestamp(exif_timestamp: Optional[str], photo_name: str) -> str:
     Timestamps angehängt, sodass generate_item_name() einen eindeutigen
     Item-Namen erzeugt.
 
-    Fallback auf Dateinamen oder aktuelles Datum wenn EXIF fehlt.
+    Fallback auf Timestamp im Dateinamen wenn EXIF fehlt. Kann aus keiner der
+    beiden Quellen ein Timestamp bestimmt werden, wird KEIN Datum (auch nicht
+    das aktuelle) untergeschoben — der Aufrufer muss das Bild überspringen
+    und darf es nicht in STAC importieren.
+
+    Returns:
+        Optional[str]: Timestamp-String, oder None wenn kein Timestamp ermittelbar ist.
     """
     # Alle Produkte (EBN/EBO/QDOP) erhalten immer ein 2-stelliges ms-Suffix.
     # Kein Burst-Offset bekannt → "00". Burst-Frame → "01".."99".
@@ -1280,8 +1172,41 @@ def parse_exif_timestamp(exif_timestamp: Optional[str], photo_name: str) -> str:
     except Exception as e:
         logger.debug(f" Konnte Timestamp nicht aus Dateinamen extrahieren: {e}")
 
-    logger.warning(f" ! Kein Timestamp gefunden - verwende aktuelles Datum")
-    return datetime.now().strftime("%Y-%m-%dt%H%M%S").lower() + ms_suffix
+    logger.error(
+        f" ✗ Kein Timestamp ermittelbar (weder EXIF noch Dateiname) — "
+        f"Bild wird NICHT in STAC importiert: {photo_name}"
+    )
+    return None
+
+
+def apply_date_override(timestamp: str, date_override: Optional[str], photo_name: str) -> str:
+    """
+    Ersetzt Jahr-Monat-Tag im Timestamp durch das im GUI/CLI eingegebene
+    TimeStamp-Datum, falls dieses vom (aus EXIF oder Dateiname ermittelten)
+    Datum abweicht. Uhrzeit + Hundertstel-Suffix bleiben unverändert aus der
+    Bildquelle.
+
+    Args:
+        timestamp (str): "YYYY-MM-DDthhmmsscc", ermittelt aus EXIF/Dateiname
+        date_override (Optional[str]): eingegebenes Datum "YYYY-MM-DD", oder None
+        photo_name (str): Dateiname fürs Logging
+
+    Returns:
+        str: Timestamp, ggf. mit überschriebenem Datum
+    """
+    if not date_override:
+        return timestamp
+
+    source_date = timestamp[:10]
+    if source_date == date_override:
+        return timestamp
+
+    logger.info(
+        f"  ℹ Datum überschrieben ({photo_name}): "
+        f"Bild {source_date} → TimeStamp-Eingabe {date_override} "
+        f"(Uhrzeit {timestamp[11:]} aus Bild übernommen)"
+    )
+    return date_override + timestamp[10:]
 
 
 def dms_to_decimal(degrees: float, minutes: float, seconds: float, direction: str) -> float:
@@ -1438,8 +1363,7 @@ def resize_image_gdal(
             translate_result = subprocess.run(
                 [
                     'gdal_translate',
-                    '--config', 'NUM_THREADS', 'ALL_CPUS',
-                    '--config', 'GDAL_CACHEMAX', '512',
+                    *GDAL_PERF_FLAGS,
                     '-of', 'JPEG',
                     '-outsize', str(new_width), str(new_height),
                     str(input_file),
@@ -1458,47 +1382,6 @@ def resize_image_gdal(
         return False
 
 
-def process_single_photo(
-    photo_file: Path,
-    output_dir: Path,
-    product_type: ProductType,
-    timestamp: str
-) -> Optional[Dict]:
-    try:
-        lat, lon, exif_timestamp = extract_exif_data(photo_file)
-
-        thumbs_dir = output_dir / "thumbs"
-        thumbs_dir.mkdir(parents=True, exist_ok=True)
-        thumbnail_path = thumbs_dir / photo_file.name
-
-        thumbnail_success = resize_image_gdal(
-            photo_file,
-            thumbnail_path,
-            max_width=THUMBNAIL_CONFIG['max_width'],
-            max_height=THUMBNAIL_CONFIG['max_height']
-        )
-
-        if not thumbnail_success:
-            logger.warning(f" ! Thumbnail-Erstellung fehlgeschlagen: {photo_file.name}")
-            thumbnail_path = None
-
-        item_name = generate_item_name(timestamp, product_type)
-
-        return {
-            'original_path': photo_file,
-            'thumbnail_path': thumbnail_path,
-            'item_name': item_name,
-            'original_filename': photo_file.name,
-            'lat': lat,
-            'lon': lon,
-            'timestamp': exif_timestamp
-        }
-
-    except Exception as e:
-        logger.error(f"  ✗ Fehler bei Photo-Verarbeitung: {e}")
-        return None
-
-
 def process_individual_photos(
     input_dir: Path,
     output_dir: Path,
@@ -1510,6 +1393,7 @@ def process_individual_photos(
     environment: str,
     upload_enabled: bool = True,
     debug: bool = False,
+    date_override: Optional[str] = None,
 ) -> Optional[Dict]:
     """
     Verarbeitet alle Photos in einem Verzeichnis.
@@ -1517,8 +1401,12 @@ def process_individual_photos(
     Args:
         debug: True → sequentielle Verarbeitung mit vollem Logging (für Debugging).
                False → parallele Konvertierung + Upload (Produktion, Standard).
+        date_override: im GUI/CLI eingegebenes Datum "YYYY-MM-DD" (EBN/EBO).
+               Ersetzt Jahr-Monat-Tag im Item-/Asset-Namen, falls es vom
+               EXIF-/Dateinamen-Datum abweicht — die Uhrzeit stammt weiterhin
+               immer aus dem Bild. Siehe apply_date_override().
 
-    NEU v2.3: Parallele Verarbeitung via ThreadPoolExecutor wenn debug=False.
+    Parallele Verarbeitung via ThreadPoolExecutor wenn debug=False.
     """
     try:
         temp_dir = output_dir / "temp_photos"
@@ -1541,6 +1429,8 @@ def process_individual_photos(
         # ====================================================================
         is_tif_mode = False
         work_items: List[Dict] = []
+        # Dateien ohne ermittelbaren Timestamp — werden nicht importiert (siehe unten)
+        skipped_no_timestamp: List[Path] = []
 
         if product_type in [ProductType.EBN, ProductType.EBO]:
             logger.info(" Lese Verzeichnis...")
@@ -1643,27 +1533,42 @@ def process_individual_photos(
                     logger.info(f"  Übersprungen: {len(dropped)} Dateien (vollständig durch andere abgedeckt)")
 
                 # Arbeitsliste aufbauen (noch keine Konvertierung)
+                # Dateien ohne aus dem Bild ermittelbaren Timestamp werden NICHT
+                # importiert (kein Fallback auf das aktuelle Datum) — stattdessen
+                # übersprungen und klar protokolliert (Terminal + Log).
                 for tif in tif_files_to_process:
                     effective_ts = ts_with_offset.get(tif, '')
+
+                    if not effective_ts or effective_ts.startswith('__no_ts_'):
+                        logger.error(
+                            f"  ✗ Kein Timestamp im Bild gefunden — "
+                            f"NICHT in STAC importiert: {tif.name}"
+                        )
+                        skipped_no_timestamp.append(tif)
+                        continue
+
+                    # Item-Namen direkt aus effective_ts berechnen (nicht aus EXIF)
+                    base_ts = effective_ts[:19]
+                    try:
+                        dt = datetime.strptime(base_ts, "%Y:%m:%d %H:%M:%S")
+                    except ValueError:
+                        logger.error(
+                            f"  ✗ Timestamp ungültig ({base_ts!r}) — "
+                            f"NICHT in STAC importiert: {tif.name}"
+                        )
+                        skipped_no_timestamp.append(tif)
+                        continue
+
                     # JPEG-Stem mit ms-Offset kodieren
-                    if effective_ts and len(effective_ts) > 19:
+                    if len(effective_ts) > 19:
                         time_part = effective_ts[11:19].replace(':', '')
                         ms_part   = effective_ts[20:]
                     else:
-                        time_part = effective_ts[11:19].replace(':', '') if len(effective_ts) >= 19 else '000000'
+                        time_part = effective_ts[11:19].replace(':', '')
                         ms_part   = '00'
                     jpg_stem = f"{tif.stem}_{time_part}_{ms_part}"
-
-                    # Item-Namen direkt aus effective_ts berechnen (nicht aus EXIF)
-                    base_ts = effective_ts[:19] if effective_ts else None
-                    if base_ts:
-                        try:
-                            dt = datetime.strptime(base_ts, "%Y:%m:%d %H:%M:%S")
-                            timestamp = dt.strftime("%Y-%m-%dt%H%M%S").lower() + ms_part
-                        except ValueError:
-                            timestamp = datetime.now().strftime("%Y-%m-%dt%H%M%S").lower() + ms_part
-                    else:
-                        timestamp = datetime.now().strftime("%Y-%m-%dt%H%M%S").lower() + ms_part
+                    timestamp = dt.strftime("%Y-%m-%dt%H%M%S").lower() + ms_part
+                    timestamp = apply_date_override(timestamp, date_override, tif.name)
 
                     work_items.append({
                         'source_path':   tif,
@@ -1673,6 +1578,13 @@ def process_individual_photos(
                         'item_name':     generate_item_name(timestamp, product_type),
                         'gdalinfo_text': gdalinfo_cache.get(tif, ''),
                     })
+
+                if skipped_no_timestamp:
+                    logger.error(
+                        f"  ✗ {len(skipped_no_timestamp)} Datei(en) ohne Timestamp "
+                        f"übersprungen (NICHT importiert): "
+                        f"{', '.join(t.name for t in skipped_no_timestamp)}"
+                    )
 
                 logger.info(f" Plan: {len(work_items)} Datei(en)")
                 for w in work_items:
@@ -1759,7 +1671,17 @@ def process_individual_photos(
                     if debug:
                         if lat: logger.info(f"     ✓ GPS: {lat:.6f}, {lon:.6f}")
                         else:   logger.warning("    ! Keine GPS-Daten")
-                    timestamp  = parse_exif_timestamp(exif_timestamp, jpg_file.name)
+                    timestamp = parse_exif_timestamp(exif_timestamp, jpg_file.name)
+                    if timestamp is None:
+                        logger.error(
+                            f"{log_prefix}: ✗ Kein Timestamp ermittelbar — "
+                            f"NICHT in STAC importiert (übersprungen)"
+                        )
+                        return {'source_path': source_path, 'original_filename': source_path.name,
+                                'error': 'no timestamp', 'skipped_no_timestamp': True,
+                                'photo_upload_success': False, 'thumbnail_upload_success': False,
+                                'lat': lat, 'lon': lon}
+                    timestamp  = apply_date_override(timestamp, date_override, jpg_file.name)
                     item_name  = generate_item_name(timestamp, product_type)
                     asset_name = f"{item_name}-{get_product_config(product_type)['suffix']}"
 
@@ -1945,8 +1867,10 @@ def process_individual_photos(
             for idx, work in enumerate(work_items, 1):
                 result = _process_one(work, idx, total)
                 photos.append(result)
-                if result.get('photo_upload_success'): successful_uploads += 1
-                if result.get('lat') is None:          missing_gps += 1
+                if result.get('photo_upload_success'):   successful_uploads += 1
+                if result.get('lat') is None:             missing_gps += 1
+                if result.get('skipped_no_timestamp'):
+                    skipped_no_timestamp.append(result['source_path'])
 
         else:
             # Parallel — mehrere Dateien gleichzeitig konvertieren + hochladen
@@ -1975,8 +1899,10 @@ def process_individual_photos(
                 for future in _as_completed(future_to_idx):
                     result = future.result()
                     photos.append(result)
-                    if result.get('photo_upload_success'): successful_uploads += 1
-                    if result.get('lat') is None:          missing_gps += 1
+                    if result.get('photo_upload_success'):   successful_uploads += 1
+                    if result.get('lat') is None:             missing_gps += 1
+                    if result.get('skipped_no_timestamp'):
+                        skipped_no_timestamp.append(result['source_path'])
                     done += 1
                     if done % max(1, total // 10) == 0 or done == total:
                         logger.info(f" Fortschritt: {done}/{total} "
@@ -1999,6 +1925,14 @@ def process_individual_photos(
         logger.info(f"Gesamt verarbeitet:      {len(photos)}/{total}")
         logger.info(f"Ohne GPS-Daten:          {missing_gps}")
 
+        if skipped_no_timestamp:
+            logger.error(
+                f"Ohne Timestamp (NICHT importiert): {len(skipped_no_timestamp)} — "
+                f"{', '.join(p.name for p in skipped_no_timestamp)}"
+            )
+        else:
+            logger.info("Ohne Timestamp (NICHT importiert): 0")
+
         if upload_enabled:
             logger.info(f"Erfolgreich hochgeladen: {successful_uploads}/{total}")
             failed = total - successful_uploads
@@ -2013,6 +1947,7 @@ def process_individual_photos(
             'photos': photos,
             'temp_dir': temp_dir,
             'missing_gps_count': missing_gps,
+            'skipped_no_timestamp_count': len(skipped_no_timestamp),
             'successful_uploads': successful_uploads if upload_enabled else 0
         }
 

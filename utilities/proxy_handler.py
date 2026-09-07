@@ -25,6 +25,7 @@ VPN-Erkennung:
 
 import json
 import logging
+import sys
 import urllib.request
 import requests
 import urllib3
@@ -32,6 +33,21 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+
+def _get_app_base_dir() -> Path:
+    """
+    Basisverzeichnis der Anwendung — unabhängig vom Arbeitsverzeichnis (cwd)
+    des aufrufenden Prozesses.
+
+    Gebündelte EXE (PyInstaller):  Ordner der .exe (secrets/ liegt daneben,
+                                    siehe pyinstaller_onedir.bat/onefile.bat)
+    Python-Skript:                 Projekt-Wurzel (zwei Ebenen über
+                                    utilities/proxy_handler.py)
+    """
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent.parent
 
 # ============================================================================
 # GLOBALE PROXY-KONFIGURATION
@@ -68,7 +84,7 @@ DEFAULT_PROXY_CONFIG = {
     'disable_ssl_warnings': True
 }
 
-PROXY_CONFIG_PATH = Path("secrets") / "proxy_config.json"
+PROXY_CONFIG_PATH = _get_app_base_dir() / "secrets" / "proxy_config.json"
 
 
 def load_proxy_config() -> Dict:

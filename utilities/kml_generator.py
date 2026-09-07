@@ -20,20 +20,29 @@ def query_stac_items_by_date(
     stac_url: str,
     collection: str,
     date: str,
-    product_suffix: str
+    product_suffix: str,
+    max_pages: int = 100
 ) -> List[Dict]:
     """
     Queries STAC for all items of a specific date and product using pure requests.
     Handles pagination to retrieve all results.
+
+    Die Paginierung folgt der STAC-API-Spec: der next-Link wird mit "merge": true
+    geliefert, sein body (Cursor) muss deshalb in den bestehenden Request-Body
+    gemergt werden. Ein Ersetzen würde collections/datetime/limit verwerfen —
+    die API blättert dann ungefiltert durch die gesamte Datenbank.
 
     Args:
         stac_url:       Vollständige STAC-API-URL (endet auf /api/stac/v0.9/)
         collection:     STAC Collection Name
         date:           Datum YYYY-MM-DD
         product_suffix: z.B. "ebn", "ebo" (ohne "-photo"/"-mosaic")
+        max_pages:      Obergrenze der Seitenabfragen; wird sie erreicht, gilt die
+                        Abfrage als fehlgeschlagen (leere Liste, kein Teilresultat)
 
     Returns:
         List[Dict] mit Keys: item_id, asset_url, thumbnail_url, lat, lon, timestamp
+        Leere Liste bei Fehler — ein Teilresultat wird nie zurückgegeben.
     """
     try:
         session = get_session()
@@ -48,14 +57,21 @@ def query_stac_items_by_date(
             "limit": 100
         }
 
-        all_results = []
-        page_count = 0
+        all_results   = []
+        page_count    = 0
+        method        = "POST"
+        url           = search_endpoint
+        last_cursor   = None
+        date_prefix   = date  # "YYYY-MM-DD"
 
         while True:
             page_count += 1
             logger.info(f" Fetching page {page_count}...")
 
-            resp = session.post(search_endpoint, json=payload)
+            if method == "GET":
+                resp = session.get(url)
+            else:
+                resp = session.post(url, json=payload)
             resp.raise_for_status()
             data = resp.json()
 
@@ -66,13 +82,24 @@ def query_stac_items_by_date(
                 if 'overview' in item_id:
                     continue
 
+                props    = feature.get("properties", {})
+                geometry = feature.get("geometry", {})
+
+                # Schutz gegen Filterverlust bei der Paginierung: nur Items der
+                # angefragten Collection und des angefragten Tages übernehmen.
+                # Ohne diesen Guard landen bei fehlerhafter Paginierung Items
+                # fremder Collections/Jahre im KML und CSV.
+                feature_collection = feature.get("collection")
+                if feature_collection and feature_collection != collection:
+                    continue
+                if not str(props.get("datetime") or "").startswith(date_prefix):
+                    continue
+
                 # Filter by asset keys — item names no longer contain the product
                 # suffix, but asset filenames still do (e.g. ram-...-ebn-photo.jpg)
                 assets = feature.get("assets", {})
                 if not any(product_suffix in k for k in assets):
                     continue
-                props    = feature.get("properties", {})
-                geometry = feature.get("geometry", {})
 
                 asset_url     = None
                 thumbnail_url = None
@@ -101,26 +128,50 @@ def query_stac_items_by_date(
                     'timestamp':     timestamp
                 })
 
-            # Paginierung
+            # ----------------------------------------------------------------
+            # Paginierung gemäss STAC-API-Spec (Item Search / Paging):
+            # Der next-Link liefert href, method und body. Ist "merge": true
+            # gesetzt, ERGÄNZT der body den bisherigen Request-Body (nur den
+            # Cursor) — er ersetzt ihn NICHT. Wird er ersetzt, gehen
+            # collections/datetime/limit verloren und die API blättert
+            # ungefiltert durch die gesamte Datenbank.
+            # ----------------------------------------------------------------
             next_link = None
             for link in data.get("links", []):
                 if link.get("rel") == "next":
-                    next_link = link.get("href")
-                    next_body = link.get("body")
-                    if next_body:
-                        payload = next_body
-                    elif link.get("method") == "GET":
-                        search_endpoint = next_link
-                        payload = None
+                    next_link = link
                     break
 
             if not next_link:
                 logger.info(f" No more pages (fetched {page_count} pages total)")
                 break
 
-            if page_count > 1000:
-                logger.warning(f" Reached safety limit of 1000 pages, stopping")
+            url       = next_link.get("href") or url
+            method    = str(next_link.get("method") or "GET").upper()
+            next_body = next_link.get("body")
+
+            if next_body:
+                if next_link.get("merge"):
+                    payload = {**payload, **next_body}
+                else:
+                    payload = dict(next_body)
+
+            # Cursor-Stillstand abfangen (sonst Endlosschleife auf derselben Seite)
+            cursor = (payload or {}).get("cursor") if method != "GET" else url
+            if cursor is not None and cursor == last_cursor:
+                logger.warning(" ! Cursor bewegt sich nicht — Paginierung abgebrochen")
                 break
+            last_cursor = cursor
+
+            if page_count >= max_pages:
+                # Hart abbrechen: eine unvollständige/fehlgeleitete Trefferliste
+                # darf NICHT als KML/CSV publiziert werden.
+                raise RuntimeError(
+                    f"Paginierung nach {max_pages} Seiten abgebrochen — "
+                    f"unerwartet viele Resultate für {date} / {product_suffix}. "
+                    f"Die STAC-Abfrage gilt als fehlgeschlagen."
+                )
+
 
         logger.info(f"  ✓ {len(all_results)} Items found across {page_count} pages")
         return all_results
@@ -128,6 +179,30 @@ def query_stac_items_by_date(
     except Exception as e:
         logger.error(f"  ✗ STAC query failed: {e}")
         return []
+
+
+def extract_photo_urls(items: List[Dict]) -> List[str]:
+    """
+    Extrahiert die Haupt-Asset-URLs aus bereits abgefragten STAC-Items.
+
+    Reine Auswertung ohne Netzwerkzugriff — dadurch können KML und CSV aus
+    ein und derselben STAC-Abfrage bedient werden. Thumbnails und Items ohne
+    Foto-Asset (z.B. KML/CSV-Overview-Items) fallen weg.
+
+    Args:
+        items: Ergebnis von query_stac_items_by_date()
+
+    Returns:
+        Sortierte Liste der Asset-URLs (alphabetisch = chronologisch).
+    """
+    urls = sorted(
+        item['asset_url']
+        for item in items
+        if item.get('asset_url')
+    )
+
+    logger.info(f"  ✓ {len(urls)} publizierte Foto-URLs extrahiert")
+    return urls
 
 
 def get_published_photo_urls(
@@ -139,9 +214,9 @@ def get_published_photo_urls(
     """
     Gibt eine geordnete Liste der effektiv publizierten Foto-URLs aus dem STAC.
 
-    Baut auf query_stac_items_by_date() auf und extrahiert daraus nur die
-    Haupt-Asset-URLs (keine Thumbnails, keine KML-Overviews).
-    Primäre Datenquelle für generate_csv_from_stac() in photo_processor.py.
+    Convenience-Wrapper: fragt STAC ab und extrahiert die URLs. Liegen die
+    Items bereits vor, stattdessen extract_photo_urls() verwenden — das
+    vermeidet eine zweite vollständige Paginierung.
 
     Args:
         stac_url:       Vollständige STAC-API-URL
@@ -154,15 +229,7 @@ def get_published_photo_urls(
         Leere Liste bei Fehler oder keinen Resultaten.
     """
     items = query_stac_items_by_date(stac_url, collection, date, product_suffix)
-
-    urls = sorted(
-        item['asset_url']
-        for item in items
-        if item.get('asset_url')
-    )
-
-    logger.info(f"  ✓ {len(urls)} publizierte Foto-URLs extrahiert")
-    return urls
+    return extract_photo_urls(items)
 
 
 def generate_kml_from_stac_items(
@@ -240,16 +307,22 @@ def create_overview_kml(
     date: str,
     product_suffix: str,
     product_config: Dict,
-    output_file: Path
+    output_file: Path,
+    items: Optional[List[Dict]] = None
 ) -> bool:
     """
     Complete Workflow: Query STAC -> Generate KML.
+
+    Args:
+        items: Bereits abgefragte STAC-Items. Wenn gesetzt, entfällt die
+               erneute Abfrage — KML und CSV teilen sich dann eine Paginierung.
     """
     logger.info("=" * 70)
     logger.info("KML-OVERVIEW GENERATION")
     logger.info("=" * 70)
 
-    items = query_stac_items_by_date(stac_url, collection, date, product_suffix)
+    if items is None:
+        items = query_stac_items_by_date(stac_url, collection, date, product_suffix)
 
     if not items:
         logger.warning(" ! No items found - KML not created")

@@ -5,13 +5,15 @@ __pycache__/
 
 # C extensions
 *.so
+*.exe
 
 # Distribution / packaging
 .Python
 build/
 develop-eggs/
-dist/
 downloads/
+dist/
+dist/*.exe
 eggs/
 .eggs/
 lib/
@@ -167,3 +169,9 @@ secrets/
 temp/
 results/
 rclone/
+
+# GUI: lokal persistierte Einstellungen (Theme, letztes Verzeichnis)
+gui_config.json
+
+# .exe in Root
+rapidmapping_processor.exe

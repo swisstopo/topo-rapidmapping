@@ -2,6 +2,10 @@
 
 Automatisiertes System für die Publikation von Rapid Mapping Daten auf der FSDI STAC Plattform.
 
+## GUI 
+
+<img width="435" height="372" alt="image" src="https://github.com/user-attachments/assets/0e69e8ef-049e-4333-841d-81269497c295" />
+
 ## Übersicht
 
 Dieses Tool vereint die Funktionalität von:
@@ -17,6 +21,7 @@ in einem einzigen, benutzerfreundlichen Workflow mit automatischer Proxy-Erkennu
 - **DMC4-Workflow (QDOP)**: Verarbeitet 4-Kanal DMC4-Bildstreifen automatisch zu RGB + NRG COG
 - **Automatische Proxy-Erkennung**: VPN- und Corporate-Proxy-Support mit SSL-Handling
 - **EXIF-Extraktion für (EBN, EBO)**: GPS und Zeitstempel aus Einzelbildern
+- **EBN/EBO Datums-Override**: Weicht das EXIF-Datum eines Fotos vom eingegebenen TimeStamp-Datum ab, wird für Item-/Asset-Name das eingegebene Datum verwendet — die Uhrzeit stammt weiterhin aus dem Foto
 - **KML-Overview (EBN, EBO)**: Automatische Generierung via STAC-Abfrage nach Upload
 - **Multi-Environment**: INT und PROD-Support
 - **Batch-Upload**: Einzelbilder werden sequenziell hochgeladen
@@ -26,15 +31,23 @@ in einem einzigen, benutzerfreundlichen Workflow mit automatischer Proxy-Erkennu
 
 ```
 rapidmapping_processor/
-├── rapidmapping_processor.py      # Hauptskript (CLI)
+├── 0_GUI_rapidmapping_STACimport.py  # GUI-Einstiegspunkt (empfohlen)
+├── rapidmapping_processor.py      # Hauptskript (CLI, auch als .exe)
 ├── configuration.py                # Produktdefinitionen & Konfiguration
 ├── requirements.txt                # Python-Dependencies
 ├── setup.bat                       # Windows Setup-Script
+├── test_functions.py               # Unit-Tests (siehe Abschnitt Tests)
 ├── README.md                       # Diese Datei
+├── gui/                             # GUI-Module (Tkinter)
+│   ├── app.py                     # Hauptfenster: Formular, Validierung, Log
+│   ├── runner.py                  # Subprocess-Ausführung + Live-Streaming
+│   ├── theme.py                   # Hell/Dunkel-Theme
+│   └── config.py                  # Persistierte GUI-Einstellungen
 ├── utilities/                      # Hilfsfunktionen
 │   ├── credentials.py             # Credentials-Management (INT/PROD)
 │   ├── proxy_handler.py           # Proxy-Erkennung & VPN-Support
 │   ├── file_handler.py            # Datei-Operationen
+│   ├── gdal_helpers.py            # Gemeinsame GDAL-Performance-Flags & -progress-Erkennung
 │   ├── mosaic_processor.py        # COG-File Processing
 │   ├── photo_processor.py         # Einzelbild-Verarbeitung
 │   ├── kml_generator.py           # KML-Overview via STAC-Abfrage
@@ -42,26 +55,26 @@ rapidmapping_processor/
 ├── secrets/                        # Credentials (NICHT in Git!)
 │   ├── stac_credentials.json      # STAC API-Keys (INT + PROD)
 │   └── proxy_config.json          # Proxy-Konfiguration
+├── dist/                           # PyInstaller-Output (.exe, NICHT in Git! siehe Abschnitt "Generate Executable")
+├── _logs/                          # Log-Datei pro Lauf (siehe Abschnitt Logging)
 ├── temp/                           # Temporäre Dateien (wird gelöscht)
 ├── util_publish_stac_fsdi.py      # Bestehender STAC-Publisher
 └── main_multipart_upload_via_api.py # Multipart-Upload
 
 ```
 
-## Installation
+## A - Installation
 
-### 1. GDAL-Tools installieren (kommt mit QGIS)
+### GDAL-Tools installieren (kommt mit QGIS, meist bereits installiert)
 
 #### Windows (OSGeo4W Shell)
 1. Download: https://trac.osgeo.org/osgeo4w/
 2. Installiere GDAL-Pakete
 3. Führe Script in OSGeo4W Shell aus
 
-**ODER: Nutze QGIS** (empfohlen)
+**QGIS bereits installiert** (empfohlen)
 ```bash
 # QGIS enthält bereits GDAL
-# Öffne "OSGeo4W Shell" aus QGIS-Installation
-# Beispiel-Pfad: C:\Program Files\QGIS 3.40.7\OSGeo4W.bat
 ```
 
 #### Linux
@@ -70,16 +83,7 @@ sudo apt update
 sudo apt install gdal-bin python3-gdal
 ```
 
-### .EXE (empfohlen)
-
-#### Windows (OSGeo4W Shell)
-1. Kopiere Secrets Folder und dist/rapidmapping_processor.exe ind das gleiche Verezeichnis
-2. Führe Script in OSGeo4W Shell aus
-```bash
-rapidmapping_processor.exe
-```
-
-### 3. Python Virtual Environment ( 2. Wahl )
+### 1. Python Virtual Environment (optional)
 
 #### Mit QGIS Python:
 ```bash
@@ -92,13 +96,13 @@ python3 -m venv .venv
 source .venv/bin/activate
 ```
 
-### 3. Python-Dependencies installieren
+### 2. Python-Dependencies installieren
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 4. Automatisches Setup (Windows)
+### 3. Automatisches Setup (Windows)
 
 ```bash
 setup.bat
@@ -111,7 +115,7 @@ Dieses Script prüft:
 - Installiert Dependencies
 - Prüft Credentials
 
-## Konfiguration
+## B - Konfiguration
 
 ### STAC Credentials
 
@@ -223,9 +227,81 @@ pip install requests-negotiate-sspi
 
 Voraussetzung: Windows, am Active-Directory-Domain angemeldet.
 
-## Verwendung
 
-### Grundlegende Commands
+
+
+
+# C Verwendung
+
+### 1 .EXE (1. Wahl / empfohlen)
+
+#### Windows (OSGeo4W Shell)
+1. Kopiere Secrets Folder und dist/rapidmapping_processor.exe in das gleiche Verezeichnis
+2. Führe Script in OSGeo4W Shell aus
+```bash
+rapidmapping_processor.exe
+```
+
+### 2 GUI via Python (GUI Option)
+
+#### GUI starten mit cmd-Terminal (Python):
+
+1. Kopiere Secrets Folder und dist/rapidmapping_processor.exe in C:/LegacySW/topo-rapidmapping (Root Ordner)
+2. Win-Taste + "cmd"
+3. cmd-Terminal öffnet sich
+
+```bash
+# Terminal: cd /d C:/LegacySW/topo-rapidmapping (enter)
+# Terminal: python 0_GUI_rapidmapping_STACimport.py (enter)
+```
+
+```bash cmd-Terminal
+python 0_GUI_rapidmapping_STACimport.py
+```
+
+Grafische Oberfläche (Tkinter) als Alternative zum Terminal-Dialog. Startet
+`rapidmapping_processor.py`/`.exe` im Hintergrund als Subprocess.
+Bevorzugt automatisch eine vorhandene `rapidmapping_processor.exe`-Anwendung im selben Verzeichnis, sonst wird `python rapidmapping_processor.py` verwendet.
+
+Felder:
+
+| Feld | Entspricht CLI-Flag |
+|------|---------------------|
+| Umgebung (INT/PROD) | `--prod` |
+| Input-Verzeichnis (Durchsuchen…) | `--input` |
+| Produkttyp (Dropdown) | `--product` |
+| Zeitstempel/Datum | `--timestamp` |
+| STAC-Upload | `--upload` |
+| Debug-Modus | `--debug` |
+| Netzwerk-Modus (Dropdown) | `--proxy` |
+| COG-Kompression/Qualität (nur bei QDOP-DMC4 sichtbar) | `--cog-compress` / `--cog-quality` |
+
+- **Start-Button bleibt deaktiviert**, bis Verzeichnis, Zeitstempel-Format
+  (abhängig vom gewählten Produkttyp) und — falls Upload aktiv — vorhandene
+  STAC-Credentials alle gültig sind (rote Umrandung bei ungültigen Feldern).
+  Validiert mit denselben Funktionen wie die CLI (`configuration.py`,
+  `utilities/file_handler.py`) — keine abweichende Logik.
+- Vor dem Start erscheint eine Zusammenfassung zur Bestätigung.
+- **Abbrechen-Button** bricht einen laufenden Import sauber ab
+  (`terminate()`/`kill()` des Subprozesses).
+- Live-Log-Fenster, inkl. korrekt aktualisierter Fortschrittsbalken (z.B.
+  beim Multipart-Upload großer COGs).
+- Hell/Dunkel-Theme (Standard: Dunkel), Theme und letztes Input-Verzeichnis
+  werden lokal in `gui_config.json` gespeichert.
+
+#### GUI-Workflow (Schritt für Schritt)
+
+1. **Umgebung wählen** (INT oder PROD)
+2. **Input-Verzeichnis** über "Durchsuchen…" auswählen
+3. **Produkttyp** aus Dropdown wählen (QDOP RGB/NRG, EBN, EBO, QDOP-DMC4)
+4. **Zeitstempel/Datum** eingeben (Format abhängig vom Produkttyp)
+5. **Netzwerk-Modus** wählen, falls Upload aktiv (Autodetect/Kein Proxy/Bundesnetz/definierter Proxy)
+6. **STAC-Upload** und **Debug-Modus** optional aktivieren
+7. Sobald alle Felder gültig sind (keine rote Umrandung), wird der **Start-Button** aktiv
+8. **Zusammenfassung bestätigen**
+9. **Live-Log** und Fortschrittsbalken verfolgen; bei Bedarf mit **Abbrechen** sauber stoppen
+
+### Grundlegende Commands (CLI)
 
 ```bash
 # INT-Environment (Standard)
@@ -354,6 +430,26 @@ Asset: ram-2024-07-15t23595900-ebn.txt
 - **Warnung bei fehlenden GPS-Daten**: Foto wird übersprungen
 - **KML**: Nur Fotos mit GPS-Daten werden eingebunden
 
+#### Datum: TimeStamp-Eingabe vs. EXIF
+
+Das im GUI/CLI eingegebene `TimeStamp`-Feld ist bei EBN/EBO nur ein **Datum**
+(`YYYY-MM-DD`, kein Uhrzeitanteil). Für Item-/Asset-Name gilt pro Foto:
+
+- **Jahr-Monat-Tag**: immer vom eingegebenen TimeStamp — auch dann, wenn das
+  aus EXIF (`DateTimeOriginal`) bzw. als Fallback aus dem Dateinamen
+  ermittelte Datum abweicht.
+- **Stunde-Minute-Sekunde**: immer aus dem Foto (EXIF bzw. Dateiname),
+  unverändert.
+
+Jede Abweichung wird pro Foto im Log protokolliert, z. B.:
+```
+ℹ Datum überschrieben (IMG_0231.jpg): Bild 2025-07-10 → TimeStamp-Eingabe 2025-07-11 (Uhrzeit 08:00:28 aus Bild übernommen)
+```
+
+Hintergrund: Die Kamera-Uhr läuft manchmal falsch oder driftet über eine
+Tagesgrenze; das im Feld eingegebene Datum entspricht dem tatsächlichen
+Flug-/Aufnahmedatum und soll deshalb für die STAC-Benennung massgebend sein.
+
 ### 3. QDOP-DMC4 (4-Kanal DMC4-Bildstreifen)
 
 #### Input Requirements
@@ -375,6 +471,8 @@ Asset: ram-2024-07-15t23595900-ebn.txt
    └─ Alle NRG-Streifen → mosaic_nrg.vrt
 
 4. COG-Konvertierung (gdal_translate -of COG)
+   ├─ COMPRESS/QUALITY wählbar via GUI oder --cog-compress/--cog-quality
+   │  (default: COMPRESS=JPEG, QUALITY=75), Output immer 8-Bit (-ot Byte)
    ├─ mosaic_rgb.vrt → ram-YYYY-MM-DDthhmmsscc-qdop-rgb-mosaic.tif
    └─ mosaic_nrg.vrt → ram-YYYY-MM-DDthhmmsscc-qdop-nrg-mosaic.tif
 
@@ -513,6 +611,35 @@ class ProductType(Enum):
     EBO       = "ebo"         # Einzelbilder Oblique
 ```
 
+## Tests
+
+`test_functions.py` enthält Unit-Tests für die reinen Python-Funktionen des
+Projekts (Namenskonventionen, Validierung, Timestamp-Parsing, Dateisuche
+usw.) — alles ohne echten GDAL-Aufruf, ohne Netzwerk und ohne STAC-Upload,
+läuft also überall wo Python installiert ist (auch ohne OSGeo4W-Umgebung).
+Module mit rasterio/pyproj-Importen auf Modulebene (`util_publish_stac_fsdi.py`)
+werden dafür per Mock ersetzt.
+
+```bash
+python test_functions.py
+# oder, falls installiert:
+python -m pytest test_functions.py -v
+```
+
+Abgedeckt sind u. a.:
+- `configuration.py`: Zeitstempel-Validierung/-Normalisierung, Item-/Asset-Namensbildung
+- `utilities/file_handler.py`: Verzeichnis-Validierung, Bilddatei-Suche
+- `utilities/gdal_helpers.py`: `-progress`-Erkennung inkl. Caching (Subprocess gemockt)
+- `utilities/photo_processor.py`: `parse_exif_timestamp()` — Regressionstest für "kein
+  Fallback aufs aktuelle Datum bei fehlendem Timestamp" (siehe Version History v2.4);
+  `_assign_sequential_ms_offsets()` für Burst-Kollisionen
+- `util_publish_stac_fsdi.py`: `asset_create_title()` — Regressionstest für den
+  behobenen `AttributeError` bei nicht erkennbarem Dateinamensmuster
+
+**Nicht abgedeckt** (würden echtes GDAL, Netzwerk oder STAC-Zugangsdaten
+brauchen): der komplette `rapidmapping_processor.py`-Hauptlauf, echte
+STAC-Uploads, GDAL-Subprozessaufrufe selbst.
+
 ## Troubleshooting
 
 ### GDAL nicht gefunden
@@ -603,6 +730,25 @@ Das Script gibt detailliertes Feedback:
 INFO:  ✓ Erfolgreiche Operation
 WARNING: ⚠ Warnung (nicht kritisch)
 ERROR: ✗ Fehler (kritisch)
+```
+
+### Log-Datei
+
+Jeder Lauf schreibt automatisch eine Log-Datei in den Ordner `_logs/`
+(wird bei Bedarf angelegt):
+
+```
+_logs/<stac-datum>_<produkttyp>_<importDatum>.log
+```
+
+- `<stac-datum>`: Datum/Zeitstempel der verarbeiteten Aufnahme (`--timestamp`),
+  z.B. `2025-09-03` oder `2024-07-15t143000`
+- `<produkttyp>`: `ebn`, `ebo`, `qdop-rgb`, `qdop-nrg` oder `qdop-dmc4`
+- `<importDatum>`: Zeitpunkt des Programmlaufs, Format `JJJJMMTT-hhmmss`
+
+Beispiel:
+```
+_logs/2025-09-03_ebn_20260720-143512.log
 ```
 
 ### Log-Level anpassen
@@ -822,6 +968,8 @@ python rapidmapping_processor.py --proxy BVCOL  --product ebn --input /data --ti
 | `--upload` | `True` / `False` | Upload zu STAC (False → ./output/) |
 | `--prod` | Flag | Produktionsumgebung (default: INT) |
 | `--debug` | Flag | Sequentiell + volles Logging |
+| `--cog-compress` | `JPEG`, `LZW`, `DEFLATE`, `ZSTD`, `WEBP`, `NONE` | COG COMPRESS-Verfahren (default: `JPEG`). Wirkt nur bei `--product qdop-dmc4` — einziger Workflow, der selbst einen COG via `gdal_translate` erzeugt. Output ist immer 8-Bit. |
+| `--cog-quality` | `1`–`100` | JPEG-Qualität, nur wirksam bei `--cog-compress JPEG` (default: `75`) |
 
 ### Debug-Modus direkt im Code setzen
 
@@ -1009,6 +1157,17 @@ Bei Problemen:
 MIT
 
 ## Version History
+
+### v2.5 (2026-08)
+- **EBN/EBO Datums-Override**: Weicht das EXIF-/Dateinamen-Datum eines Fotos vom eingegebenen TimeStamp-Datum ab, wird für Item-/Asset-Name das eingegebene Datum verwendet (Jahr-Monat-Tag); die Uhrzeit stammt weiterhin aus dem Foto. Jede Überschreibung wird pro Foto geloggt (siehe [Datum: TimeStamp-Eingabe vs. EXIF](#datum-timestamp-eingabe-vs-exif))
+
+### v2.4 (2026-07)
+- **GUI**: Neue grafische Oberfläche `0_GUI_rapidmapping_STACimport.py` (Tkinter) als Alternative zum Terminal-Dialog — live validierte Formularfelder, Bestätigungsdialog, echter Abbrechen-Button, Live-Log mit korrekt aktualisierten Fortschrittsbalken, Hell/Dunkel-Theme (Standard: Dunkel)
+- **Log-Dateien**: Landen jetzt in `_logs/` statt im Hauptverzeichnis, neue Namenskonvention `<stac-datum>_<produkttyp>_<importDatum>.log`
+- **EBN/EBO ohne Timestamp**: Bilder ohne aus EXIF/Dateiname ermittelbaren Zeitstempel werden nicht mehr mit dem aktuellen Datum importiert, sondern übersprungen und klar protokolliert (Terminal + Log)
+- **Multipart-Upload**: Part-Grösse wird dynamisch aus der Dateigrösse abgeleitet — behebt einen harten ~24 GB-Limit-Fehler bei sehr grossen COGs (z.B. Quickmosaik eines ganzen Kantons)
+- **Cleanup**: toter Code entfernt (u.a. `utilities/stac_query.py`), GDAL-Performance-Flags/`-progress`-Erkennung in `utilities/gdal_helpers.py` zentralisiert, `util_publish_stac_fsdi.py` nutzt jetzt durchgängig `logging` statt `print()`
+- **Tests**: `test_functions.py` — Unit-Tests für Namenskonventionen, Zeitstempel-Parsing, Dateisuche und die beiden oben genannten Regressionsfixe (kein Datum-Fallback, `asset_create_title`)
 
 ### v2.3 (2025-05)
 - **Kerberos-Proxy EXE-Fix**: 407-Fehler in der generierten EXE behoben (win32timezone + SSPI-Tunnel-Patch)

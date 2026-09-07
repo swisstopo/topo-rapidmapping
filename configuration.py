@@ -23,13 +23,20 @@ COLLECTION_BASE_URL = "https://data.geo.admin.ch/ch.swisstopo.rapidmapping/data/
 PREFIX = "ram"  # Rapid Mapping Prefix
 
 # COG Creation Settings
+# 'compress'/'quality' sind Default-Werte — im GUI für alle Produkttypen
+# ausser EBN/EBO manuell überschreibbar (--cog-compress / --cog-quality).
+# Output ist immer 8-Bit (-ot Byte), unabhängig von der Compression-Wahl.
 COG_CONFIG = {
     'compress': 'JPEG',
     'quality': 75,
     'blocksize': 256,
     'bigtiff': 'YES',
-    'num_threads': 'ALL_CPUS'
+    'num_threads': 'ALL_CPUS',
+    'output_type': 'Byte'
 }
+
+# Im GUI/CLI wählbare COMPRESS-Verfahren für die COG-Erzeugung.
+COG_COMPRESS_OPTIONS = ['JPEG', 'LZW', 'DEFLATE', 'ZSTD', 'WEBP', 'NONE']
 
 # Mosaic Creation Settings
 MOSAIC_CONFIG = {
@@ -157,6 +164,28 @@ def validate_timestamp(timestamp: str) -> bool:
         return False
 
 
+def normalize_cli_timestamp(raw: str) -> str:
+    """
+    Normalize compact timestamp to standard YYYY-MM-DDthhmmss[cc] format.
+
+    Args:
+        raw (str): Raw CLI input, e.g. '20210729t125959' or '20210729'
+
+    Returns:
+        str: Normalized timestamp, e.g. '2021-07-29t125959'
+    """
+    # Already normalized if it contains dashes
+    if '-' in raw:
+        return raw
+    # Match compact: YYYYMMDD[tHHMMSS[CC]]
+    m = re.match(r'^(\d{4})(\d{2})(\d{2})(t\d{6}(\d{2})?)?$', raw)
+    if m:
+        date_part = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+        time_part = m.group(4) or ''
+        return date_part + time_part
+    return raw  # return as-is; validate_timestamp will reject it later
+
+
 def ensure_hundredths_suffix(timestamp: str) -> str:
     """
     Ensures timestamp has 2-digit hundredths-of-seconds suffix.
@@ -215,43 +244,6 @@ def generate_asset_name(timestamp: str, product_type: ProductType) -> str:
     ts = ensure_hundredths_suffix(timestamp).lower()
     config = get_product_config(product_type)
     return f"{PREFIX}-{ts}-{config['suffix']}{config['file_extension']}"
-
-
-def get_collection_url(item_name: str, hostname: str = None) -> str:
-    """
-    Generiert Collection-URL für ein Item.
-
-    Args:
-        item_name (str): STAC Item Name
-        hostname (str, optional): STAC Hostname (default: STAC_HOSTNAME)
-
-    Returns:
-        str: Vollständige URL zur Collection
-    """
-    host = hostname or STAC_HOSTNAME
-    return f"https://{STAC_HOSTNAME}/{STAC_COLLECTION}/{item_name}/"
-
-
-def validate_item_name_format(item_name: str) -> bool:
-    """
-    Validiert Item Name Format für Einzelbilder (YYYY-###-CAPITALLETTERS).
-
-    Nur relevant für alternative Namensschemas bei Einzelbildern.
-
-    Args:
-        item_name (str): Zu validierender Item Name
-
-    Returns:
-        bool: True wenn gültig, False sonst
-
-    Examples:
-        >>> validate_item_name_format("2024-001-WALLIS")
-        True
-        >>> validate_item_name_format("2024-1-wallis")
-        False
-    """
-    pattern = r'^\d{4}-\d{3}-[A-Z]+$'
-    return bool(re.fullmatch(pattern, item_name))
 
 
 # Koordinatensystem-Definitionen (für EXIF-Verarbeitung)

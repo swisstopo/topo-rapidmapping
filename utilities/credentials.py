@@ -8,13 +8,25 @@ Unterstützt mehrere Quellen mit Priorität:
 
 import json
 import os
+import sys
 import logging
 from pathlib import Path
 from typing import Tuple
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_CREDENTIALS_PATH = Path("secrets") / "stac_credentials.json"
+
+def _get_app_base_dir() -> Path:
+    """
+    Basisverzeichnis der Anwendung — unabhängig vom Arbeitsverzeichnis (cwd)
+    des aufrufenden Prozesses. Siehe utilities/proxy_handler.py für Details.
+    """
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent.parent
+
+
+DEFAULT_CREDENTIALS_PATH = _get_app_base_dir() / "secrets" / "stac_credentials.json"
 
 
 def load_credentials_from_file(filepath: Path, environment: str = "INT") -> Tuple[str, str, str]:
@@ -181,29 +193,3 @@ def load_stac_credentials(
         )
 
 
-def validate_credentials(username: str, password: str) -> bool:
-    """
-    Validiert Credentials (einfache Prüfung auf nicht-leere Strings).
-    
-    Args:
-        username (str): Username
-        password (str): Password
-        
-    Returns:
-        bool: True wenn gültig, False sonst
-    """
-    return bool(username and username.strip() and 
-                password and password.strip())
-
-
-def validate_environment(environment: str) -> bool:
-    """
-    Validiert Environment-String.
-    
-    Args:
-        environment (str): Environment ("INT" oder "PROD")
-        
-    Returns:
-        bool: True wenn gültig, False sonst
-    """
-    return environment.upper() in ["INT", "PROD"]

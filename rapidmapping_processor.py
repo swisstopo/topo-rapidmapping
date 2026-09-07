@@ -16,6 +16,7 @@ Usage:
 """
 
 import argparse
+import io
 import logging
 import re
 import sys
@@ -28,13 +29,15 @@ from configuration import (
     ProductType,
     get_product_config,
     validate_timestamp,
+    normalize_cli_timestamp,
     generate_item_name,
     generate_asset_name,
-    get_collection_url,
     STAC_COLLECTION,
     GEOCAT_ID,
     STAC_SCHEME,
-    STAC_API_PATH
+    STAC_API_PATH,
+    COG_CONFIG,
+    COG_COMPRESS_OPTIONS
 )
 from utilities.file_handler import (
     validate_directory,
@@ -42,11 +45,38 @@ from utilities.file_handler import (
 )
 from utilities.mosaic_processor import process_single_cog_file
 from utilities.photo_processor import process_individual_photos, generate_csv_from_stac
-from utilities.kml_generator import create_overview_kml
+from utilities.kml_generator import create_overview_kml, query_stac_items_by_date
 from utilities.stac_publisher import publish_to_stac_wrapper
 from utilities.proxy_handler import initialize_proxy, get_configured_proxy_names
 from utilities.credentials import load_stac_credentials
+from utilities.gdal_helpers import GDAL_PERF_FLAGS, supports_progress
 # publish_to_stac importiert lazy (verhindert circular import)
+
+# Windows: ist stdout/stderr nicht an eine echte Konsole angehängt (z.B. wenn
+# das GUI diesen Prozess über eine Pipe ausliest), fällt Python auf die
+# ANSI-Codepage zurück (meist cp1252). Fortschrittsbalken-Zeichen (█ ░ ✓ ...)
+# lassen sich damit nicht kodieren -> UnicodeEncodeError bricht die
+# Verarbeitung ab, obwohl Upload etc. bereits erfolgreich waren. UTF-8 mit
+# Ersatzzeichen-Fallback erzwingen, unabhängig davon, wie/womit der Prozess
+# gestartet wurde (Konsole, GUI-Subprocess, PYTHONIOENCODING gesetzt oder nicht).
+# TextIOWrapper.reconfigure() gibt es erst ab Python 3.7 — falls nicht
+# vorhanden (Python 3.6), stdout/stderr manuell um den Rohbuffer neu wrappen.
+for _name in ("stdout", "stderr"):
+    _stream = getattr(sys, _name)
+    if hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+            continue
+        except Exception:
+            pass
+    _buffer = getattr(_stream, "buffer", None)
+    if _buffer is not None:
+        try:
+            setattr(sys, _name, io.TextIOWrapper(
+                _buffer, encoding="utf-8", errors="replace", line_buffering=True
+            ))
+        except Exception:
+            pass
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
@@ -190,26 +220,6 @@ def _ensure_ms_suffix(timestamp: str) -> str:
     return timestamp
 
 
-_GDAL_PROGRESS_SUPPORTED: dict = {}  # cache per executable, e.g. {'gdal_translate': True}
-
-# Performance flags injected into every GDAL command that processes pixels.
-# --config NUM_THREADS ALL_CPUS  → multi-thread COG tile/overview generation
-# --config GDAL_CACHEMAX 512     → 512 MB block cache (avoids repeated disk reads)
-_GDAL_PERF = [
-    "--config", "NUM_THREADS", "ALL_CPUS",
-    "--config", "GDAL_CACHEMAX", "512",
-]
-
-
-def _supports_progress(exe: str) -> bool:
-    """Probe once whether this GDAL build accepts -progress for the given tool."""
-    import subprocess as _sp
-    if exe not in _GDAL_PROGRESS_SUPPORTED:
-        r = _sp.run([exe, "--help"], capture_output=True, text=True)
-        _GDAL_PROGRESS_SUPPORTED[exe] = "-progress" in r.stdout or "-progress" in r.stderr
-    return _GDAL_PROGRESS_SUPPORTED[exe]
-
-
 def _poll_progress(output_path: "Path", ref_size_bytes: int, stop_event, interval: float = 0.5):
     """
     Background thread: polls output_path size and prints a live progress bar.
@@ -268,9 +278,9 @@ def _run_gdal(label: str, cmd: list, output_path: "Path | None" = None) -> bool:
     logger.info(f"  → {label}")
 
     # Inject performance flags right after the executable name
-    cmd = [cmd[0]] + _GDAL_PERF + cmd[1:]
+    cmd = [cmd[0]] + GDAL_PERF_FLAGS + cmd[1:]
 
-    if _supports_progress(cmd[0]):
+    if supports_progress(cmd[0]):
         full_cmd = cmd + ["-progress"]
         result = _sp.run(full_cmd, stderr=_sp.PIPE, text=True)
     else:
@@ -405,6 +415,8 @@ def process_mosaic_workflow(
 def process_dmc4_workflow(
     input_dir, timestamp, upload_enabled, environment, hostname,
     debug: bool = False,
+    cog_compress: str = COG_CONFIG['compress'],
+    cog_quality: int = COG_CONFIG['quality'],
 ):
     """
     Workflow für DMC4 4-Kanal Bildstreifen.
@@ -418,7 +430,7 @@ def process_dmc4_workflow(
          - RGB: Bänder 1, 2, 3
          - NRG: Bänder 4, 1, 2 (Nahinfrarot, Rot, Grün)
       3. VRT-Mosaike bauen (RGB + NRG)
-      4. Als COG konvertieren
+      4. Als COG konvertieren (COMPRESS/QUALITY manuell wählbar, Output immer 8-Bit)
       5. Thumbnail aus RGB-COG erstellen
       6. RGB-COG, NRG-COG und Thumbnail ins gleiche STAC-Item hochladen
     """
@@ -486,7 +498,6 @@ def process_dmc4_workflow(
 
             # Step 2: build VRT mosaics — honour nodata so stripe gaps are transparent
             # gdalbuildvrt does not support -progress, run quietly
-            import subprocess as _sp
             for label, src_dir, vrt_name in [
                 ("RGB", t_rgb, "mosaic_rgb.vrt"),
                 ("NRG", t_nrg, "mosaic_nrg.vrt"),
@@ -510,6 +521,12 @@ def process_dmc4_workflow(
             logger.info("✓ VRT-Mosaike erstellt")
 
             # Step 3: convert VRTs to COG (nodata preserved)
+            # COMPRESS ist im GUI/CLI wählbar; QUALITY greift nur bei COMPRESS=JPEG.
+            # Output ist immer 8-Bit (-ot Byte), unabhängig von der Compression-Wahl.
+            _cog_co = ["-co", f"COMPRESS={cog_compress}"]
+            if cog_compress.upper() == "JPEG":
+                _cog_co += ["-co", f"QUALITY={cog_quality}"]
+
             for label, vrt_name, cog in [
                 ("RGB", "mosaic_rgb.vrt", cog_rgb),
                 ("NRG", "mosaic_nrg.vrt", cog_nrg),
@@ -517,8 +534,9 @@ def process_dmc4_workflow(
                 if not _run_gdal(
                     f"COG {label}: {cog.name}",
                     ["gdal_translate", "-of", "COG",
-                     "-co", "COMPRESS=JPEG", "-co", "QUALITY=75",
+                     *_cog_co,
                      "-co", "BIGTIFF=YES",
+                     "-ot", "Byte",
                      "-a_nodata", "0",
                      str(tmp / vrt_name), str(cog)],
                     output_path=cog
@@ -578,32 +596,14 @@ def process_photos_workflow(
     debug: bool = False,
 ):
     """
-    import logging as _logging
-    if not debug:
-        for _mod in ['utilities.stac_publisher', 'utilities.credentials',
-                     'utilities.proxy_handler', 'main_multipart_upload_via_api',
-                     'util_publish_stac_fsdi', 'utilities.kml_generator']:
-            _logging.getLogger(_mod).setLevel(_logging.WARNING)
-    # Workflow fuer Einzelbilder: Upload -> KML -> CSV.
+    Workflow für Einzelbilder: Upload -> KML -> CSV.
 
-    v2.2:
-    - KML/CSV Overview-Item: Timestamp t23595900 (ms-Suffix "00")
-    - generate_csv_from_stac fragt STAC per Datum+Suffix ab -> findet alle
-      Items unabhaengig vom ms-Suffix (Bug 3 automatisch geloest)
+    KML/CSV-Overview-Item verwendet Timestamp t23595900 (ms-Suffix "00").
+    Die STAC-Abfrage erfolgt EINMAL für beide Outputs (KML + CSV) und
+    bewusst VOR dem Upload des Overview-Items, damit dieses nicht in der
+    eigenen Trefferliste landet.
     """
     try:
-        import logging
-        from pathlib import Path
-        from configuration import (
-            STAC_COLLECTION, GEOCAT_ID, STAC_SCHEME, STAC_API_PATH,
-            get_product_config, generate_item_name
-        )
-        from utilities.photo_processor import process_individual_photos, generate_csv_from_stac
-        from utilities.kml_generator import create_overview_kml
-        from utilities.stac_publisher import publish_to_stac_wrapper
-
-        logger = logging.getLogger(__name__)
-
         temp_dir = Path("output") if not upload_enabled else Path("temp")
         temp_dir.mkdir(exist_ok=True)
 
@@ -626,6 +626,7 @@ def process_photos_workflow(
             environment=environment,
             upload_enabled=upload_enabled,
             debug=debug,
+            date_override=date,
         )
 
         if not result:
@@ -639,7 +640,21 @@ def process_photos_workflow(
         if result['successful_uploads'] > 0:
 
             logger.info("\n" + "=" * 70)
-            logger.info("GENERIERE KML-OVERVIEW (via STAC-Abfrage)")
+            logger.info("STAC-ABFRAGE (einmalig für KML + CSV)")
+            logger.info("=" * 70)
+
+            # Eine Paginierung für beide Outputs statt zweier identischer
+            # Abfragen. Bewusst VOR dem Upload des Overview-Items, damit
+            # dieses nicht in der eigenen Trefferliste landet.
+            stac_items = query_stac_items_by_date(
+                stac_url=stac_url,
+                collection=STAC_COLLECTION,
+                date=date,
+                product_suffix=product_suffix
+            )
+
+            logger.info("\n" + "=" * 70)
+            logger.info("GENERIERE KML-OVERVIEW")
             logger.info("=" * 70)
 
             # NEU v2.2: Overview-Item mit ms-Suffix "00"
@@ -655,7 +670,8 @@ def process_photos_workflow(
                 date=date,
                 product_suffix=product_suffix,
                 product_config=config,
-                output_file=kml_file
+                output_file=kml_file,
+                items=stac_items
             )
 
             if kml_success:
@@ -672,7 +688,7 @@ def process_photos_workflow(
 
             if upload_enabled:
                 logger.info("\n" + "=" * 70)
-                logger.info("GENERIERE CSV AUS STAC")
+                logger.info("GENERIERE CSV (aus derselben STAC-Abfrage)")
                 logger.info("=" * 70)
 
                 csv_asset_name = f"{kml_item_name}-{product_short}.txt"
@@ -683,7 +699,8 @@ def process_photos_workflow(
                     collection=STAC_COLLECTION,
                     date=date,
                     product_suffix=product_suffix,
-                    output_file=csv_file
+                    output_file=csv_file,
+                    items=stac_items
                 )
 
                 if csv_ok and csv_file.exists():
@@ -725,28 +742,6 @@ def process_photos_workflow(
         logging.getLogger(__name__).error(f"Fehler im Photos-Workflow: {str(e)}")
         logging.getLogger(__name__).error(traceback.format_exc())
         return False
-
-
-def _normalize_cli_timestamp(raw: str) -> str:
-    """
-    Normalize compact timestamp to standard YYYY-MM-DDthhmmss[cc] format.
-
-    Args:
-        raw (str): Raw CLI input, e.g. '20210729t125959' or '20210729'
-
-    Returns:
-        str: Normalized timestamp, e.g. '2021-07-29t125959'
-    """
-    # Already normalized if it contains dashes
-    if '-' in raw:
-        return raw
-    # Match compact: YYYYMMDD[tHHMMSS[CC]]
-    m = re.match(r'^(\d{4})(\d{2})(\d{2})(t\d{6}(\d{2})?)?$', raw)
-    if m:
-        date_part = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
-        time_part = m.group(4) or ''
-        return date_part + time_part
-    return raw  # return as-is; validate_timestamp will reject it later
 
 
 # ============================================================
@@ -806,7 +801,24 @@ def main():
                               '"system" (nur System-Proxy/Bundesnetz), '
                               'oder Proxy-Name aus proxy_config.json (z.B. "BVCOL")'))
 
+    # COG-Erzeugung (nur wirksam bei qdop-dmc4 — einziger Workflow, der selbst
+    # einen COG via gdal_translate erzeugt; QDOP-RGB/NRG erwarten ein bereits
+    # fertiges COG als Input)
+    parser.add_argument('--cog-compress', dest='cog_compress', default=COG_CONFIG['compress'],
+                        choices=COG_COMPRESS_OPTIONS,
+                        help=f"COG COMPRESS-Verfahren (default: {COG_CONFIG['compress']})")
+    parser.add_argument('--cog-quality', dest='cog_quality', type=int, default=COG_CONFIG['quality'],
+                        metavar='1-100',
+                        help=f"JPEG-Qualität, nur bei --cog-compress JPEG (default: {COG_CONFIG['quality']})")
+
     args = parser.parse_args()
+
+    if not (1 <= args.cog_quality <= 100):
+        logger.error(f"✗ --cog-quality muss zwischen 1 und 100 liegen (erhalten: {args.cog_quality})")
+        return 1
+    # True wenn Produkt/Input/Timestamp allesamt via CLI übergeben wurden —
+    # steuert sowohl das Überspringen der interaktiven Prompts als auch der
+    # abschliessenden [j/N]-Bestätigung.
     _is_full_cli = bool(args.product and args.input_dir and args.timestamp)
 
     # C) Resolve debug flag: CLI > DEBUG_MODE_DEFAULT
@@ -884,7 +896,7 @@ def main():
             product_type = prompt_product_type()
 
         if args.timestamp:
-            ts = _normalize_cli_timestamp(args.timestamp.lower().strip())
+            ts = normalize_cli_timestamp(args.timestamp.lower().strip())
             if product_type in (ProductType.EBN, ProductType.EBO):
                 # EBN/EBO: accept date only (YYYY-MM-DD)
                 try:
@@ -926,10 +938,7 @@ def main():
         print("=" * 70)
 
         # Skip confirmation when all parameters supplied via CLI
-        _all_cli = (args.input_dir is not None
-                    and args.product is not None
-                    and args.timestamp is not None)
-        if _all_cli:
+        if _is_full_cli:
             logger.info("▶ CLI-Modus: Starte ohne Bestätigung")
             confirm = 'j'
         else:
@@ -943,8 +952,12 @@ def main():
         print("=" * 70 + "\n")
 
         # ── Log-Datei einrichten ──────────────────────────────────────────────
-        _log_ts       = datetime.now().strftime('%Y%m%d_%H%M%S')
-        _log_filename = f"Log_{product_type.value}_{_log_ts}.txt"
+        # Namenskonvention: <stac-datum>_<produkttyp>_<importDatum>.log
+        # z.B. 2025-09-03_ebn_20260720-143512.log
+        _logs_dir     = Path("_logs")
+        _logs_dir.mkdir(exist_ok=True)
+        _import_ts    = datetime.now().strftime('%Y%m%d-%H%M%S')
+        _log_filename = _logs_dir / f"{timestamp_or_date}_{product_type.value}_{_import_ts}.log"
         _log_handler  = logging.FileHandler(_log_filename, encoding='utf-8')
         _log_handler.setLevel(logging.INFO)
         _log_handler.setFormatter(
@@ -966,7 +979,9 @@ def main():
                 success = process_dmc4_workflow(
                     input_dir, timestamp_or_date,
                     args.upload, environment, hostname,
-                    debug=args.debug
+                    debug=args.debug,
+                    cog_compress=args.cog_compress,
+                    cog_quality=args.cog_quality
                 )
             else:
                 success = process_photos_workflow(

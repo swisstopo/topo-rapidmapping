@@ -45,7 +45,7 @@ from utilities.file_handler import (
 )
 from utilities.mosaic_processor import process_single_cog_file
 from utilities.photo_processor import process_individual_photos, generate_csv_from_stac
-from utilities.kml_generator import create_overview_kml
+from utilities.kml_generator import create_overview_kml, query_stac_items_by_date
 from utilities.stac_publisher import publish_to_stac_wrapper
 from utilities.proxy_handler import initialize_proxy, get_configured_proxy_names
 from utilities.credentials import load_stac_credentials
@@ -599,8 +599,9 @@ def process_photos_workflow(
     Workflow für Einzelbilder: Upload -> KML -> CSV.
 
     KML/CSV-Overview-Item verwendet Timestamp t23595900 (ms-Suffix "00").
-    generate_csv_from_stac fragt STAC per Datum+Suffix ab -> findet alle
-    Items unabhängig vom ms-Suffix.
+    Die STAC-Abfrage erfolgt EINMAL für beide Outputs (KML + CSV) und
+    bewusst VOR dem Upload des Overview-Items, damit dieses nicht in der
+    eigenen Trefferliste landet.
     """
     try:
         temp_dir = Path("output") if not upload_enabled else Path("temp")
@@ -639,7 +640,21 @@ def process_photos_workflow(
         if result['successful_uploads'] > 0:
 
             logger.info("\n" + "=" * 70)
-            logger.info("GENERIERE KML-OVERVIEW (via STAC-Abfrage)")
+            logger.info("STAC-ABFRAGE (einmalig für KML + CSV)")
+            logger.info("=" * 70)
+
+            # Eine Paginierung für beide Outputs statt zweier identischer
+            # Abfragen. Bewusst VOR dem Upload des Overview-Items, damit
+            # dieses nicht in der eigenen Trefferliste landet.
+            stac_items = query_stac_items_by_date(
+                stac_url=stac_url,
+                collection=STAC_COLLECTION,
+                date=date,
+                product_suffix=product_suffix
+            )
+
+            logger.info("\n" + "=" * 70)
+            logger.info("GENERIERE KML-OVERVIEW")
             logger.info("=" * 70)
 
             # NEU v2.2: Overview-Item mit ms-Suffix "00"
@@ -655,7 +670,8 @@ def process_photos_workflow(
                 date=date,
                 product_suffix=product_suffix,
                 product_config=config,
-                output_file=kml_file
+                output_file=kml_file,
+                items=stac_items
             )
 
             if kml_success:
@@ -672,7 +688,7 @@ def process_photos_workflow(
 
             if upload_enabled:
                 logger.info("\n" + "=" * 70)
-                logger.info("GENERIERE CSV AUS STAC")
+                logger.info("GENERIERE CSV (aus derselben STAC-Abfrage)")
                 logger.info("=" * 70)
 
                 csv_asset_name = f"{kml_item_name}-{product_short}.txt"
@@ -683,7 +699,8 @@ def process_photos_workflow(
                     collection=STAC_COLLECTION,
                     date=date,
                     product_suffix=product_suffix,
-                    output_file=csv_file
+                    output_file=csv_file,
+                    items=stac_items
                 )
 
                 if csv_ok and csv_file.exists():

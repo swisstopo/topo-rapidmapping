@@ -1055,6 +1055,7 @@ def generate_csv_from_stac(
     date: str,
     product_suffix: str,
     output_file: Path,
+    items: Optional[List[Dict]] = None,
 ) -> bool:
     """
     Erstellt eine CSV-Datei mit den effektiv im STAC publizierten Foto-URLs.
@@ -1073,23 +1074,31 @@ def generate_csv_from_stac(
         date (str):            Datum im Format YYYY-MM-DD
         product_suffix (str):  Produkt-Suffix z.B. "ebn", "ebo"
         output_file (Path):    Pfad zur Ausgabe-Datei
+        items (list):          Bereits abgefragte STAC-Items. Wenn gesetzt,
+                               wird keine erneute STAC-Abfrage ausgefuehrt.
 
     Returns:
-        bool: True wenn erfolgreich (auch wenn 0 URLs gefunden), False bei I/O-Fehler
+        bool: True wenn erfolgreich, False bei I/O-Fehler oder 0 gefundenen URLs
     """
-    from utilities.kml_generator import get_published_photo_urls
+    from utilities.kml_generator import extract_photo_urls, get_published_photo_urls
 
     logger.info(f"\n→ Generiere CSV aus STAC-Daten: {output_file.name}")
 
-    urls = get_published_photo_urls(
-        stac_url=stac_url,
-        collection=collection,
-        date=date,
-        product_suffix=product_suffix
-    )
+    if items is None:
+        urls = get_published_photo_urls(
+            stac_url=stac_url,
+            collection=collection,
+            date=date,
+            product_suffix=product_suffix
+        )
+    else:
+        urls = extract_photo_urls(items)
 
     if not urls:
-        logger.warning(" ! Keine publizierten URLs gefunden – leere CSV wird erstellt")
+        # Kein Teilresultat publizieren: nach erfolgreichen Uploads MUSS die
+        # STAC-Abfrage Treffer liefern. Leere Liste = fehlgeschlagene Abfrage.
+        logger.error(" ✗ Keine publizierten URLs gefunden – CSV wird NICHT erstellt")
+        return False
 
     try:
         output_file.parent.mkdir(parents=True, exist_ok=True)

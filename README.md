@@ -15,6 +15,7 @@ in einem einzigen, benutzerfreundlichen Workflow mit automatischer Proxy-Erkennu
 
 - **Single COG-File Workflow (QDOP)**: Prüft ob Input bereits COG-konform ist (8-bit RGB, 3 Bänder)
 - **DMC4-Workflow (QDOP)**: Verarbeitet 4-Kanal DMC4-Bildstreifen automatisch zu RGB + NRG COG
+- **Grafische Oberfläche (GUI)**: Formularbasierter STAC-Import als Alternative zur CLI
 - **Automatische Proxy-Erkennung**: VPN- und Corporate-Proxy-Support mit SSL-Handling
 - **EXIF-Extraktion für (EBN, EBO)**: GPS und Zeitstempel aus Einzelbildern
 - **KML-Overview (EBN, EBO)**: Automatische Generierung via STAC-Abfrage nach Upload
@@ -27,14 +28,21 @@ in einem einzigen, benutzerfreundlichen Workflow mit automatischer Proxy-Erkennu
 ```
 rapidmapping_processor/
 ├── rapidmapping_processor.py      # Hauptskript (CLI)
+├── 0_GUI_rapidmapping_STACimport.py # GUI-Einstiegspunkt (startet gui.app)
 ├── configuration.py                # Produktdefinitionen & Konfiguration
 ├── requirements.txt                # Python-Dependencies
 ├── setup.bat                       # Windows Setup-Script
 ├── README.md                       # Diese Datei
+├── gui/                             # Grafische Oberfläche
+│   ├── app.py                     # Hauptfenster / Formular
+│   ├── runner.py                  # Führt rapidmapping_processor.py als Subprocess aus
+│   ├── config.py                  # GUI-eigene Einstellungen (persistiert)
+│   └── theme.py                   # Dark/Light-Theme
 ├── utilities/                      # Hilfsfunktionen
 │   ├── credentials.py             # Credentials-Management (INT/PROD)
 │   ├── proxy_handler.py           # Proxy-Erkennung & VPN-Support
 │   ├── file_handler.py            # Datei-Operationen
+│   ├── gdal_helpers.py            # Gemeinsame GDAL-Hilfsfunktionen
 │   ├── mosaic_processor.py        # COG-File Processing
 │   ├── photo_processor.py         # Einzelbild-Verarbeitung
 │   ├── kml_generator.py           # KML-Overview via STAC-Abfrage
@@ -224,6 +232,14 @@ pip install requests-negotiate-sspi
 Voraussetzung: Windows, am Active-Directory-Domain angemeldet.
 
 ## Verwendung
+
+### Grafische Oberfläche (GUI)
+
+```bash
+python 0_GUI_rapidmapping_STACimport.py
+```
+
+Formularbasierte Alternative zur CLI: Umgebung, Input-Verzeichnis, Produkttyp, Zeitstempel, Upload, Debug und Netzwerk-Modus werden im Formular gewählt und daraus dieselben CLI-Flags gebaut, die `rapidmapping_processor.py` auch von Hand entgegennimmt. Ausführung erfolgt via `gui/runner.py` als Subprocess, mit Live-Log und Abbrechen-Button. Für `qdop-dmc4` sind zusätzlich `--cog-compress`/`--cog-quality` im Formular wählbar (siehe Parameter-Übersicht unten).
 
 ### Grundlegende Commands
 
@@ -496,6 +512,7 @@ COG_CONFIG = {
     'quality': 75,
     'blocksize': 256
 }
+COG_COMPRESS_OPTIONS = ['JPEG', 'LZW', 'DEFLATE', 'ZSTD', 'WEBP', 'NONE']  # wählbar in GUI/CLI
 
 # Thumbnail-Einstellungen
 THUMBNAIL_CONFIG = {
@@ -805,6 +822,10 @@ python rapidmapping_processor.py --product ebn --input /data --timestamp 2025-09
 # QDOP-DMC4 (4-Kanal Bildstreifen → erzeugt RGB + NRG)
 python rapidmapping_processor.py --product qdop-dmc4 --input /data/dmc4 --timestamp 2024-07-15t143000
 
+# QDOP-DMC4 mit abweichender COG-Kompression
+python rapidmapping_processor.py --product qdop-dmc4 --input /data/dmc4 --timestamp 2024-07-15t143000 --cog-compress LZW
+python rapidmapping_processor.py --product qdop-dmc4 --input /data/dmc4 --timestamp 2024-07-15t143000 --cog-compress JPEG --cog-quality 85
+
 # Netzwerk-Modus explizit setzen
 python rapidmapping_processor.py --proxy direct --product ebn --input /data --timestamp 2025-09-03
 python rapidmapping_processor.py --proxy system --product ebn --input /data --timestamp 2025-09-03
@@ -822,6 +843,8 @@ python rapidmapping_processor.py --proxy BVCOL  --product ebn --input /data --ti
 | `--upload` | `True` / `False` | Upload zu STAC (False → ./output/) |
 | `--prod` | Flag | Produktionsumgebung (default: INT) |
 | `--debug` | Flag | Sequentiell + volles Logging |
+| `--cog-compress` | `JPEG`, `LZW`, `DEFLATE`, `ZSTD`, `WEBP`, `NONE` | COG-Kompressionsverfahren, nur für `qdop-dmc4` (default: `JPEG`) |
+| `--cog-quality` | `1`-`100` | JPEG-Qualität für COG, nur bei `--cog-compress JPEG` (default: `75`) |
 
 ### Debug-Modus direkt im Code setzen
 
@@ -1009,6 +1032,10 @@ Bei Problemen:
 MIT
 
 ## Version History
+
+### v2.4 (2025-09)
+- **GUI**: Formularbasierte Oberfläche (`0_GUI_rapidmapping_STACimport.py`) als Alternative zur CLI, baut dieselben CLI-Flags und läuft weiterhin über `rapidmapping_processor.py`/`.exe` als Subprocess
+- **QDOP-DMC4 COG-Optionen**: Neue Parameter `--cog-compress` / `--cog-quality` zur Steuerung der COG-Kompression (default weiterhin JPEG/75)
 
 ### v2.3 (2025-05)
 - **Kerberos-Proxy EXE-Fix**: 407-Fehler in der generierten EXE behoben (win32timezone + SSPI-Tunnel-Patch)

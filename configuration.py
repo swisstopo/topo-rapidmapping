@@ -31,6 +31,9 @@ COG_CONFIG = {
     'num_threads': 'ALL_CPUS'
 }
 
+# Im GUI/CLI wählbare COMPRESS-Verfahren für die COG-Erzeugung.
+COG_COMPRESS_OPTIONS = ['JPEG', 'LZW', 'DEFLATE', 'ZSTD', 'WEBP', 'NONE']
+
 # Mosaic Creation Settings
 MOSAIC_CONFIG = {
     'srs': 'EPSG:2056',  # LV95
@@ -105,6 +108,29 @@ def get_product_config(product_type: ProductType) -> Dict[str, Any]:
     }
 
     return configs[product_type]
+
+
+def normalize_cli_timestamp(raw: str) -> str:
+    """
+    Normalisiert einen kompakten Zeitstempel auf das Standardformat
+    YYYY-MM-DDthhmmss[cc].
+
+    Args:
+        raw (str): Roher CLI-Input, z.B. '20210729t125959' oder '20210729'
+
+    Returns:
+        str: Normalisierter Zeitstempel, z.B. '2021-07-29t125959'
+    """
+    # Bereits normalisiert, wenn Bindestriche vorhanden sind
+    if '-' in raw:
+        return raw
+    # Match kompakt: YYYYMMDD[tHHMMSS[CC]]
+    m = re.match(r'^(\d{4})(\d{2})(\d{2})(t\d{6}(\d{2})?)?$', raw)
+    if m:
+        date_part = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+        time_part = m.group(4) or ''
+        return date_part + time_part
+    return raw  # unverändert zurückgeben; validate_timestamp weist es später ab
 
 
 def validate_timestamp(timestamp: str) -> bool:

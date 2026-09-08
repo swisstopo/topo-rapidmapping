@@ -28,9 +28,11 @@ from configuration import (
     ProductType,
     get_product_config,
     validate_timestamp,
+    normalize_cli_timestamp,
     generate_item_name,
     generate_asset_name,
     get_collection_url,
+    COG_CONFIG,
     STAC_COLLECTION,
     GEOCAT_ID,
     STAC_SCHEME,
@@ -405,6 +407,8 @@ def process_mosaic_workflow(
 def process_dmc4_workflow(
     input_dir, timestamp, upload_enabled, environment, hostname,
     debug: bool = False,
+    cog_compress: str = COG_CONFIG['compress'],
+    cog_quality: int = COG_CONFIG['quality'],
 ):
     """
     Workflow für DMC4 4-Kanal Bildstreifen.
@@ -510,6 +514,9 @@ def process_dmc4_workflow(
             logger.info("✓ VRT-Mosaike erstellt")
 
             # Step 3: convert VRTs to COG (nodata preserved)
+            _cog_co = ["-co", f"COMPRESS={cog_compress}"]
+            if cog_compress.upper() == "JPEG":
+                _cog_co += ["-co", f"QUALITY={cog_quality}"]
             for label, vrt_name, cog in [
                 ("RGB", "mosaic_rgb.vrt", cog_rgb),
                 ("NRG", "mosaic_nrg.vrt", cog_nrg),
@@ -517,7 +524,7 @@ def process_dmc4_workflow(
                 if not _run_gdal(
                     f"COG {label}: {cog.name}",
                     ["gdal_translate", "-of", "COG",
-                     "-co", "COMPRESS=JPEG", "-co", "QUALITY=75",
+                     *_cog_co,
                      "-co", "BIGTIFF=YES",
                      "-a_nodata", "0",
                      str(tmp / vrt_name), str(cog)],
@@ -727,26 +734,6 @@ def process_photos_workflow(
         return False
 
 
-def _normalize_cli_timestamp(raw: str) -> str:
-    """
-    Normalize compact timestamp to standard YYYY-MM-DDthhmmss[cc] format.
-
-    Args:
-        raw (str): Raw CLI input, e.g. '20210729t125959' or '20210729'
-
-    Returns:
-        str: Normalized timestamp, e.g. '2021-07-29t125959'
-    """
-    # Already normalized if it contains dashes
-    if '-' in raw:
-        return raw
-    # Match compact: YYYYMMDD[tHHMMSS[CC]]
-    m = re.match(r'^(\d{4})(\d{2})(\d{2})(t\d{6}(\d{2})?)?$', raw)
-    if m:
-        date_part = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
-        time_part = m.group(4) or ''
-        return date_part + time_part
-    return raw  # return as-is; validate_timestamp will reject it later
 
 
 # ============================================================
@@ -805,9 +792,19 @@ def main():
                               '"direct" (kein Proxy, direkte Verbindung), '
                               '"system" (nur System-Proxy/Bundesnetz), '
                               'oder Proxy-Name aus proxy_config.json (z.B. "BVCOL")'))
+    parser.add_argument('--cog-compress', dest='cog_compress', default=COG_CONFIG['compress'],
+                        metavar='VERFAHREN',
+                        help=f"COG-Kompressionsverfahren, nur für qdop-dmc4 (default: {COG_CONFIG['compress']})")
+    parser.add_argument('--cog-quality', dest='cog_quality', type=int, default=COG_CONFIG['quality'],
+                        metavar='1-100',
+                        help=f"JPEG-Qualität für COG, nur bei --cog-compress JPEG (default: {COG_CONFIG['quality']})")
 
     args = parser.parse_args()
     _is_full_cli = bool(args.product and args.input_dir and args.timestamp)
+
+    if not (1 <= args.cog_quality <= 100):
+        logger.error(f"✗ --cog-quality muss zwischen 1 und 100 liegen (erhalten: {args.cog_quality})")
+        sys.exit(1)
 
     # C) Resolve debug flag: CLI > DEBUG_MODE_DEFAULT
     if args.debug is None:
@@ -884,7 +881,7 @@ def main():
             product_type = prompt_product_type()
 
         if args.timestamp:
-            ts = _normalize_cli_timestamp(args.timestamp.lower().strip())
+            ts = normalize_cli_timestamp(args.timestamp.lower().strip())
             if product_type in (ProductType.EBN, ProductType.EBO):
                 # EBN/EBO: accept date only (YYYY-MM-DD)
                 try:
@@ -966,7 +963,9 @@ def main():
                 success = process_dmc4_workflow(
                     input_dir, timestamp_or_date,
                     args.upload, environment, hostname,
-                    debug=args.debug
+                    debug=args.debug,
+                    cog_compress=args.cog_compress,
+                    cog_quality=args.cog_quality
                 )
             else:
                 success = process_photos_workflow(

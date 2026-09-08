@@ -1760,6 +1760,12 @@ def process_individual_photos(
                     if debug:
                         if lat: logger.info(f"     ✓ GPS: {lat:.6f}, {lon:.6f}")
                         else:   logger.warning("    ! Keine GPS-Daten")
+                    if lat is None or lon is None:
+                        logger.error(f"{log_prefix}: ✗ Keine GPS-Daten ermittelbar — Bild wird NICHT in STAC importiert")
+                        return {'source_path': source_path, 'original_filename': source_path.name,
+                                'error': 'no gps', 'skipped_no_gps': True,
+                                'photo_upload_success': False, 'thumbnail_upload_success': False,
+                                'lat': lat, 'lon': lon}
 
                 else:
                     if debug: logger.info("  1.  Extrahiere EXIF-Daten (gdalinfo)...")
@@ -1768,6 +1774,12 @@ def process_individual_photos(
                     if debug:
                         if lat: logger.info(f"     ✓ GPS: {lat:.6f}, {lon:.6f}")
                         else:   logger.warning("    ! Keine GPS-Daten")
+                    if lat is None or lon is None:
+                        logger.error(f"{log_prefix}: ✗ Keine GPS-Daten ermittelbar — Bild wird NICHT in STAC importiert")
+                        return {'source_path': source_path, 'original_filename': source_path.name,
+                                'error': 'no gps', 'skipped_no_gps': True,
+                                'photo_upload_success': False, 'thumbnail_upload_success': False,
+                                'lat': lat, 'lon': lon}
                     timestamp = parse_exif_timestamp(exif_timestamp, jpg_file.name)
                     if timestamp is None:
                         return {'source_path': source_path, 'original_filename': source_path.name,
@@ -1952,8 +1964,8 @@ def process_individual_photos(
 
         photos = []
         successful_uploads = 0
-        missing_gps = 0
         skipped_no_timestamp_names = []
+        skipped_no_gps_names = []
 
         if debug:
             # Sequentiell — jede Datei einzeln mit vollem Logging
@@ -1961,9 +1973,10 @@ def process_individual_photos(
                 result = _process_one(work, idx, total)
                 photos.append(result)
                 if result.get('photo_upload_success'): successful_uploads += 1
-                if result.get('lat') is None:          missing_gps += 1
                 if result.get('skipped_no_timestamp'):
                     skipped_no_timestamp_names.append(result.get('original_filename', '?'))
+                if result.get('skipped_no_gps'):
+                    skipped_no_gps_names.append(result.get('original_filename', '?'))
 
         else:
             # Parallel — mehrere Dateien gleichzeitig konvertieren + hochladen
@@ -1993,9 +2006,10 @@ def process_individual_photos(
                     result = future.result()
                     photos.append(result)
                     if result.get('photo_upload_success'): successful_uploads += 1
-                    if result.get('lat') is None:          missing_gps += 1
                     if result.get('skipped_no_timestamp'):
                         skipped_no_timestamp_names.append(result.get('original_filename', '?'))
+                    if result.get('skipped_no_gps'):
+                        skipped_no_gps_names.append(result.get('original_filename', '?'))
                     done += 1
                     if done % max(1, total // 10) == 0 or done == total:
                         logger.info(f" Fortschritt: {done}/{total} "
@@ -2016,11 +2030,15 @@ def process_individual_photos(
         logger.info(" VERARBEITUNGSZUSAMMENFASSUNG")
         logger.info("=" * 70)
         logger.info(f"Gesamt verarbeitet:      {len(photos)}/{total}")
-        logger.info(f"Ohne GPS-Daten:          {missing_gps}")
 
         if skipped_no_timestamp_names:
             logger.warning(f"Übersprungen (kein Timestamp ermittelbar): {len(skipped_no_timestamp_names)}")
             for _name in skipped_no_timestamp_names:
+                logger.warning(f"  - {_name}")
+
+        if skipped_no_gps_names:
+            logger.warning(f"Übersprungen (keine GPS-Daten ermittelbar): {len(skipped_no_gps_names)}")
+            for _name in skipped_no_gps_names:
                 logger.warning(f"  - {_name}")
 
         if upload_enabled:
@@ -2036,9 +2054,10 @@ def process_individual_photos(
         return {
             'photos': photos,
             'temp_dir': temp_dir,
-            'missing_gps_count': missing_gps,
             'skipped_no_timestamp_count': len(skipped_no_timestamp_names),
             'skipped_no_timestamp_names': skipped_no_timestamp_names,
+            'skipped_no_gps_count': len(skipped_no_gps_names),
+            'skipped_no_gps_names': skipped_no_gps_names,
             'successful_uploads': successful_uploads if upload_enabled else 0
         }
 

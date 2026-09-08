@@ -1228,7 +1228,7 @@ def generate_csv_from_stac(
         return False
 
 
-def parse_exif_timestamp(exif_timestamp: Optional[str], photo_name: str) -> str:
+def parse_exif_timestamp(exif_timestamp: Optional[str], photo_name: str) -> Optional[str]:
     """
     Parsed EXIF-Timestamp zu Item-Timestamp-String.
 
@@ -1240,7 +1240,13 @@ def parse_exif_timestamp(exif_timestamp: Optional[str], photo_name: str) -> str:
     Timestamps angehängt, sodass generate_item_name() einen eindeutigen
     Item-Namen erzeugt.
 
-    Fallback auf Dateinamen oder aktuelles Datum wenn EXIF fehlt.
+    Fallback auf Timestamp im Dateinamen wenn EXIF fehlt. Kann aus keiner der
+    beiden Quellen ein Timestamp bestimmt werden, wird KEIN Datum (auch nicht
+    das aktuelle) untergeschoben — der Aufrufer muss das Bild überspringen
+    und darf es nicht in STAC importieren.
+
+    Returns:
+        Optional[str]: Timestamp-String, oder None wenn kein Timestamp ermittelbar ist.
     """
     # Alle Produkte (EBN/EBO/QDOP) erhalten immer ein 2-stelliges ms-Suffix.
     # Kein Burst-Offset bekannt → "00". Burst-Frame → "01".."99".
@@ -1280,8 +1286,11 @@ def parse_exif_timestamp(exif_timestamp: Optional[str], photo_name: str) -> str:
     except Exception as e:
         logger.debug(f" Konnte Timestamp nicht aus Dateinamen extrahieren: {e}")
 
-    logger.warning(f" ! Kein Timestamp gefunden - verwende aktuelles Datum")
-    return datetime.now().strftime("%Y-%m-%dt%H%M%S").lower() + ms_suffix
+    logger.error(
+        f" ✗ Kein Timestamp ermittelbar (weder EXIF noch Dateiname) — "
+        f"Bild wird NICHT in STAC importiert: {photo_name}"
+    )
+    return None
 
 
 def dms_to_decimal(degrees: float, minutes: float, seconds: float, direction: str) -> float:
@@ -1759,7 +1768,11 @@ def process_individual_photos(
                     if debug:
                         if lat: logger.info(f"     ✓ GPS: {lat:.6f}, {lon:.6f}")
                         else:   logger.warning("    ! Keine GPS-Daten")
-                    timestamp  = parse_exif_timestamp(exif_timestamp, jpg_file.name)
+                    timestamp = parse_exif_timestamp(exif_timestamp, jpg_file.name)
+                    if timestamp is None:
+                        return {'source_path': source_path, 'error': 'no timestamp',
+                                'photo_upload_success': False, 'thumbnail_upload_success': False,
+                                'lat': lat, 'lon': lon}
                     item_name  = generate_item_name(timestamp, product_type)
                     asset_name = f"{item_name}-{get_product_config(product_type)['suffix']}"
 

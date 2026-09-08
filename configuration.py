@@ -25,7 +25,7 @@ PREFIX = "ram"  # Rapid Mapping Prefix
 # COG Creation Settings
 COG_CONFIG = {
     'compress': 'JPEG',
-    'quality': 75,
+    'quality': 85,
     'blocksize': 256,
     'bigtiff': 'YES',
     'num_threads': 'ALL_CPUS'

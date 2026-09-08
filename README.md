@@ -509,7 +509,7 @@ STAC_HOSTNAME_PROD = "data.geo.admin.ch"  # PROD
 # COG-Einstellungen
 COG_CONFIG = {
     'compress': 'JPEG',
-    'quality': 75,
+    'quality': 85,
     'blocksize': 256
 }
 COG_COMPRESS_OPTIONS = ['JPEG', 'LZW', 'DEFLATE', 'ZSTD', 'WEBP', 'NONE']  # wählbar in GUI/CLI
@@ -844,7 +844,7 @@ python rapidmapping_processor.py --proxy BVCOL  --product ebn --input /data --ti
 | `--prod` | Flag | Produktionsumgebung (default: INT) |
 | `--debug` | Flag | Sequentiell + volles Logging |
 | `--cog-compress` | `JPEG`, `LZW`, `DEFLATE`, `ZSTD`, `WEBP`, `NONE` | COG-Kompressionsverfahren, nur für `qdop-dmc4` (default: `JPEG`) |
-| `--cog-quality` | `1`-`100` | JPEG-Qualität für COG, nur bei `--cog-compress JPEG` (default: `75`) |
+| `--cog-quality` | `1`-`100` | JPEG-Qualität für COG, nur bei `--cog-compress JPEG` (default: `85`) |
 
 ### Debug-Modus direkt im Code setzen
 
@@ -1035,7 +1035,9 @@ MIT
 
 ### v2.4 (2025-09)
 - **GUI**: Formularbasierte Oberfläche (`0_GUI_rapidmapping_STACimport.py`) als Alternative zur CLI, baut dieselben CLI-Flags und läuft weiterhin über `rapidmapping_processor.py`/`.exe` als Subprocess
-- **QDOP-DMC4 COG-Optionen**: Neue Parameter `--cog-compress` / `--cog-quality` zur Steuerung der COG-Kompression (default weiterhin JPEG/75)
+- **QDOP-DMC4 COG-Optionen**: Neue Parameter `--cog-compress` / `--cog-quality` zur Steuerung der COG-Kompression (default: JPEG/85, vorher fix JPEG/75)
+- **Fix: EXIF-Timestamp-Fallback**: `parse_exif_timestamp()` gibt `None` zurück statt auf das aktuelle Datum zurückzufallen, wenn weder EXIF noch Dateiname einen Timestamp liefern. Das Foto wird übersprungen (nicht mehr fälschlicherweise mit dem heutigen Datum in STAC importiert)
+- **Fix: `asset_create_title`**: wirft bei nicht erkennbarem Dateimuster eine klare `ValueError` statt eines `AttributeError`
 
 ### v2.3 (2025-05)
 - **Kerberos-Proxy EXE-Fix**: 407-Fehler in der generierten EXE behoben (win32timezone + SSPI-Tunnel-Patch)

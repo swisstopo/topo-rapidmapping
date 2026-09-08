@@ -190,6 +190,9 @@ def asset_create_title(asset, current):
     else:
         match = re.search(r'\d{4}-\d{2}-\d{2}t\d{6}', asset)
 
+    if match is None:
+        raise ValueError(f"Kein erkennbares Muster im Asset-Dateinamen: {asset}")
+
     underscore_pos = asset.find('_', match.end())
     text_after_date = asset[underscore_pos + 1:]
     filename_without_extension = text_after_date.rsplit('.', 1)[0]

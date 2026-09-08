@@ -11,6 +11,7 @@ Ausführen:
     python -m pytest test_functions.py -v   (falls pytest installiert)
 """
 
+import math
 import os
 import shutil
 import sys
@@ -453,6 +454,56 @@ class TestPromptSecretsDirIfMissing(unittest.TestCase):
             with patch("builtins.input", return_value=""):
                 rapidmapping_processor.prompt_secrets_dir_if_missing()
         self.assertEqual(Path(os.getcwd()).resolve(), Path(self._tmp_root).resolve())
+
+
+# ============================================================
+#  util_publish_stac_fsdi.publish_to_stac -> dynamische Multipart-Part-Groesse
+#  Fixe DEFAULT_PART_SIZE (250 MB) x MAX_PARTS_NUMBER (100) deckelt Assets bei
+#  ~24.4 GB. Die Part-Groesse muss ab da mitwachsen, sonst lehnt die STAC-API
+#  den Upload ab. Fuer normal grosse Assets darf sich nichts aendern.
+# ============================================================
+class TestPublishToStacPartSize(unittest.TestCase):
+
+    def _run_publish_with_size(self, size_bytes: int):
+        tmp_dir = tempfile.mkdtemp()
+        try:
+            asset_path = Path(tmp_dir) / "2025-09-03t120000_report.txt"
+            asset_path.write_text("x")  # Inhalt irrelevant, Groesse wird gemockt
+
+            captured = {}
+
+            def _fake_multipart_upload(*args, **kwargs):
+                captured['part_size_mb'] = kwargs.get('part_size_mb')
+                return True
+
+            with patch.object(util_publish_stac_fsdi, "is_existing", return_value=False), \
+                 patch.object(util_publish_stac_fsdi, "create_asset", return_value=True), \
+                 patch.object(main_multipart_upload_via_api, "multipart_upload",
+                               side_effect=_fake_multipart_upload), \
+                 patch("os.path.getsize", return_value=size_bytes):
+                success = util_publish_stac_fsdi.publish_to_stac(
+                    username="u", password="p", asset=str(asset_path),
+                    item_name="2025-09-03t120000", collection="coll",
+                    geocat_id="geocat", stac_hostname="sys-data.int.bgdi.ch",
+                )
+
+            self.assertTrue(success)
+            return captured['part_size_mb']
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_normal_grosses_asset_behaelt_default_part_size(self):
+        part_size = self._run_publish_with_size(1 * 1024 * 1024)  # 1 MB
+        self.assertEqual(part_size, main_multipart_upload_via_api.DEFAULT_PART_SIZE)
+
+    def test_riesiges_asset_bekommt_groessere_part_size_unter_dem_api_limit(self):
+        size_mb = 27000  # ~26.4 GiB - ueber der ~24.4GB-Grenze fixer 250MB-Parts
+        part_size = self._run_publish_with_size(size_mb * 1024 * 1024)
+        self.assertEqual(part_size, 300)  # ceil(27000 / 90) = 300
+        self.assertLessEqual(
+            math.ceil(size_mb / part_size), main_multipart_upload_via_api.MAX_PARTS_NUMBER,
+            "Anzahl Parts muss unter dem API-Limit bleiben"
+        )
 
 
 if __name__ == "__main__":

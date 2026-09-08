@@ -1,3 +1,4 @@
+import math
 import os
 import subprocess
 import requests
@@ -26,7 +27,10 @@ Uses proxy_handler.py for ALL proxy configuration.
 """
 
 # Multipart upload settings
-part_size_mb = 100
+# STAC API limits multipart uploads to MAX_PARTS_NUMBER (100) parts. With the fixed
+# DEFAULT_PART_SIZE (250 MB) this caps assets at ~24.4 GB. MULTIPART_UPLOAD_PARTS_TARGET
+# keeps some margin under that limit when deriving the part size for larger assets.
+MULTIPART_UPLOAD_PARTS_TARGET = 90
 attempts = 5
 
 logger = logging.getLogger(__name__)
@@ -442,11 +446,20 @@ def publish_to_stac(username, password, asset, item_name, collection, geocat_id,
         # Determine environment
         env = "int" if ".int." in stac_hostname else "prod"
 
+        # Part-Grösse dynamisch aus der Dateigrösse ableiten, damit die Anzahl Parts
+        # unter dem API-Limit (MAX_PARTS_NUMBER) bleibt, auch für Assets > 24 GB.
+        file_size_mb = os.path.getsize(os.path.join(raw_asset_path, asset)) / (1024 * 1024)
+        required_part_size_mb = max(
+            main_multipart_upload_via_api.DEFAULT_PART_SIZE,
+            math.ceil(file_size_mb / MULTIPART_UPLOAD_PARTS_TARGET)
+        )
+
         # Upload ASSET with proxy configuration
         if not main_multipart_upload_via_api.multipart_upload(
             env, collection, item, asset, os.path.join(raw_asset_path,asset),
             username, password, force=True, verbose=False,
-            proxy_config=PROXY_CONFIG  # Pass proxy config to multipart upload
+            proxy_config=PROXY_CONFIG,  # Pass proxy config to multipart upload
+            part_size_mb=required_part_size_mb
         ):
             logger.error(f"ASSET object {asset}: upload FAILED")
             return False

@@ -1058,9 +1058,17 @@ Bei Problemen:
 ## Performance-Tipps
 
 ### Upload-Geschwindigkeit
-- **Multipart-Upload**: Automatisch für große Dateien (>100MB)
+- **Multipart-Upload**: Für jedes Asset verwendet, Part-Grösse passt sich der Dateigrösse an (siehe unten) — kein hartes Limit mehr bei sehr grossen Mosaiken
 - **Batch-Processing**: Einzelbilder werden sequenziell verarbeitet
 - **Thumbnail-Größe**: 640x480px für schnelleren Upload
+
+### Multipart-Upload bei sehr grossen Assets
+
+Die STAC-API begrenzt Multipart-Uploads auf maximal 100 Parts. Mit der fixen Standard-
+Part-Grösse von 250 MB deckelt das ein einzelnes Asset bei ca. 24.4 GB. Ab dieser Grösse
+wird die Part-Grösse automatisch erhöht (Ziel: ~90 Parts, mit Sicherheitsmarge unter dem
+Limit), sodass auch grössere DMC4-/QDOP-Mosaike zuverlässig hochgeladen werden können —
+für alle kleineren Assets ändert sich nichts, die Part-Grösse bleibt bei 250 MB.
 
 ### Proxy/VPN
 - **VPN-Detection**: Automatisch SSL-Handling anpassen
@@ -1090,6 +1098,8 @@ MIT
 - **Log-Dateien**: werden jetzt in `logs/` statt im Hauptverzeichnis abgelegt, neue Namenskonvention `<stac-datum>_<produkttyp>_<importDatum>.log` (vorher `Log_<produkttyp>_<importDatum>.txt` im Hauptverzeichnis)
 - **Fix: KML/CSV-STAC-Abfrage (`kml_generator.query_stac_items_by_date`)**: Paginierung folgte bei einem GET-'next'-Link fälschlicherweise trotzdem mit POST weiter (konnte die Seite verpassen und die Paginierung vorzeitig abbrechen). Zusätzlich wird jedes Ergebnis jetzt clientseitig gegen das angefragte Datum geprüft — sollte der serverseitige `datetime`-Filter nicht greifen, landen dadurch keine Items anderer Tage mehr im KML/CSV, statt effektiv den ganzen Katalog zu verarbeiten. Ein ungewöhnlich hohes Seitenaufkommen für einen einzelnen Tag wird jetzt protokolliert
 - **Interaktive Nachfrage bei fehlendem `secrets`-Ordner**: Im interaktiven Modus fragt das Tool jetzt nach dem korrekten Pfad und wechselt automatisch dorthin, statt erst später mit einer unklaren Fehlermeldung abzubrechen — hilfreich, wenn die App mal nicht im selben Verzeichnis wie `secrets/` gestartet wurde
+- **Dynamische Multipart-Upload-Part-Grösse**: `util_publish_stac_fsdi.py` berechnet die Part-Grösse jetzt aus der Asset-Grösse (Ziel ~90 Parts), statt die feste 250-MB-Grösse zu verwenden — verhindert, dass sehr grosse Assets (> ca. 24.4 GB) am 100-Parts-Limit der STAC-API scheitern. Für normal grosse Assets bleibt die Part-Grösse unverändert bei 250 MB
+- **Fix: UnicodeEncodeError im Multipart-Upload-Fortschrittsbalken**: `main_multipart_upload_via_api.py` reconfiguriert stdout/stderr jetzt auf UTF-8, statt bei fehlender echter Konsole (z.B. GUI-Subprocess) an den Fortschrittsbalken-Zeichen (█ ░ ✓) abzustürzen — der Upload selbst war davon zwar nicht betroffen, aber der Absturz verschleierte den tatsächlichen Erfolg
 
 ### v2.3 (2025-05)
 - **Kerberos-Proxy EXE-Fix**: 407-Fehler in der generierten EXE behoben (win32timezone + SSPI-Tunnel-Patch)

@@ -13,7 +13,7 @@ in einem einzigen, benutzerfreundlichen Workflow mit automatischer Proxy-Erkennu
 
 ### Hauptfeatures
 
-- **Single COG-File Workflow (QDOP)**: Prüft ob Input bereits COG-konform ist (8-bit RGB, 3 Bänder)
+- **Single COG-File Workflow (QDOP)**: Prüft ob Input bereits COG-konform ist (8-bit RGB, 3 Bänder); ist die Datei kein COG, wird sie automatisch konvertiert
 - **DMC4-Workflow (QDOP)**: Verarbeitet 4-Kanal DMC4-Bildstreifen automatisch zu RGB + NRG COG
 - **Grafische Oberfläche (GUI)**: Formularbasierter STAC-Import als Alternative zur CLI
 - **Automatische Proxy-Erkennung**: VPN- und Corporate-Proxy-Support mit SSL-Handling
@@ -275,8 +275,8 @@ Das Script führt durch folgende Schritte:
 
 #### Input Requirements
 - **Verzeichnis mit genau 1 TIF-Datei**
-- **COG-konform** (Cloud Optimized GeoTIFF)
 - **8-bit RGB** (3 Bänder, Datatype "Byte")
+- **COG-konform** (Cloud Optimized GeoTIFF) empfohlen, aber nicht zwingend — ist die Datei kein COG, konvertiert das Tool sie automatisch (siehe unten)
 
 #### Workflow
 ```
@@ -303,13 +303,20 @@ Asset: thumbnail.jpg
 
 #### Wenn Input NICHT COG-konform ist
 
-Script gibt Fehler aus mit Anleitung zur COG-Konvertierung:
+Die Datei wird automatisch nach COG konvertiert (Kompression/Qualität aus `configuration.py`,
+`COG_CONFIG`), das Original bleibt dabei unverändert. Erst wenn die Konvertierung selbst
+fehlschlägt, bricht der Lauf ab:
 
-```bash
-✗ Datei ist KEIN Cloud Optimized GeoTIFF (COG)!
-  Bitte konvertiere zu COG mit:
-    gemäss https://github.com/geostandards-ch/cog-best-practices#lossy-visual-image-with-transparency
 ```
+INFO:   Prüfe ob COG...
+INFO:   Datei ist kein COG, starte automatische Konvertierung...
+INFO:   Kompression: JPEG, Qualität: 85
+INFO:  ✓ COG erstellt: <dateiname>_cog.tif
+```
+
+Vor der Konvertierung wird geprüft, ob am Zielort genug freier Speicherplatz vorhanden ist
+(Mosaike können im zweistelligen GB-Bereich liegen) — reicht der Speicher nicht, bricht der
+Lauf mit klarer Fehlermeldung ab, statt die Konvertierung zu versuchen.
 
 **Externes Mosaic-Erstellungs-Script verfügbar:**
 - `rm_publish_quickorthophoto.bat` für ADS100 Flightline-Mosaike
@@ -583,16 +590,23 @@ Das Tool erkennt danach automatisch dass Kerberos benötigt wird — keine weite
 - `gdalinfo photo.jpg` ausführen
 - GPS-Schreibrechte in Kamera prüfen
 
-### COG-Check fehlgeschlagen
+### COG-Konvertierung fehlgeschlagen
 ```
-✗ Datei ist KEIN Cloud Optimized GeoTIFF (COG)!
+✗ COG-Konvertierung fehlgeschlagen
 ```
+**Ursache:** Ist die Input-Datei kein COG, konvertiert das Tool sie automatisch (siehe
+[Wenn Input NICHT COG-konform ist](#wenn-input-nicht-cog-konform-ist)). Diese Meldung
+erscheint nur, wenn die automatische Konvertierung selbst scheitert (z.B. defekte/korrupte
+Input-Datei) oder zu wenig freier Speicherplatz für die konvertierte Kopie vorhanden ist.
+
 **Lösung:**
+- Input-Datei mit `gdalinfo input.tif` auf Integrität prüfen
+- Freien Speicherplatz am Zielort (`temp/` bzw. `output/`) prüfen
+- Alternativ manuell konvertieren und das Ergebnis als Input verwenden:
 ```bash
-# Konvertiere zu COG
 gdal_translate -of COG \
   -co COMPRESS=JPEG \
-  -co QUALITY=75 \
+  -co QUALITY=85 \
   -co BLOCKSIZE=256 \
   input.tif output_cog.tif
 ```
@@ -1036,6 +1050,7 @@ MIT
 ### v2.4 (2025-09)
 - **GUI**: Formularbasierte Oberfläche (`0_GUI_rapidmapping_STACimport.py`) als Alternative zur CLI, baut dieselben CLI-Flags und läuft weiterhin über `rapidmapping_processor.py`/`.exe` als Subprocess
 - **QDOP-DMC4 COG-Optionen**: Neue Parameter `--cog-compress` / `--cog-quality` zur Steuerung der COG-Kompression (default: JPEG/85, vorher fix JPEG/75)
+- **Automatische COG-Konvertierung (QDOP RGB/NRG)**: Ist die Input-Datei kein COG, wird sie automatisch konvertiert (`utilities/mosaic_processor.convert_to_cog`, via `rasterio.shutil.copy`, keine neue Abhängigkeit, funktioniert in der EXE) statt den Lauf abzubrechen. Original bleibt unverändert, Kompression/Qualität aus `COG_CONFIG`, RGB und NRG werden gleich behandelt (beide JPEG-komprimiert). Vor der Konvertierung wird der freie Speicherplatz geprüft; die temporäre `*_cog.tif` wird nach erfolgreicher Publikation mit dem restlichen `temp/`-Verzeichnis gelöscht
 - **Fix: EXIF-Timestamp-Fallback**: `parse_exif_timestamp()` gibt `None` zurück statt auf das aktuelle Datum zurückzufallen, wenn weder EXIF noch Dateiname einen Timestamp liefern. Das Foto wird übersprungen (nicht mehr fälschlicherweise mit dem heutigen Datum in STAC importiert)
 - **Fix: `asset_create_title`**: wirft bei nicht erkennbarem Dateimuster eine klare `ValueError` statt eines `AttributeError`
 

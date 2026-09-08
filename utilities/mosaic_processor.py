@@ -3,7 +3,8 @@ Orthophoto Mosaic Processing - Single File Check Only.
 
 Prüft ob im angegebenen Verzeichnis ein COG-Tiff mit 8-bit RGB (3 Bänder) vorhanden ist.
 Falls ja: Kopiere Datei und erstelle Thumbnail.
-Falls nein: Fehler - User muss COG-Tiff vorbereiten.
+Falls nein: automatische COG-Konvertierung (siehe convert_to_cog), Original bleibt
+unverändert. Nur wenn die Konvertierung selbst fehlschlägt, wird abgebrochen.
 """
 
 import os
@@ -107,6 +108,71 @@ def check_is_8bit_rgb(file_path: Path) -> bool:
     except Exception as e:
         logger.warning(f" ! 8-bit RGB Check Fehler: {e}")
         return False
+
+
+def has_enough_disk_space(directory: Path, required_bytes: int) -> bool:
+    """
+    Prüft ob im Dateisystem von `directory` mindestens `required_bytes` frei sind.
+
+    Args:
+        directory (Path): Verzeichnis, dessen Laufwerk geprüft wird
+        required_bytes (int): Benötigter freier Speicher in Bytes
+
+    Returns:
+        bool: True wenn genug Speicher frei ist
+    """
+    try:
+        return shutil.disk_usage(directory).free >= required_bytes
+    except Exception as e:
+        logger.warning(f" ! Speicherplatz-Check fehlgeschlagen: {e}")
+        return True  # Check selbst fehlgeschlagen -> nicht blockieren, gdal_translate wuerde ohnehin scheitern
+
+
+def convert_to_cog(
+    input_path: Path,
+    output_path: Path,
+    compression: str = COG_CONFIG['compress'],
+    quality: int = COG_CONFIG['quality'],
+) -> Optional[Path]:
+    """
+    Konvertiert ein GeoTIFF in ein Cloud Optimized GeoTIFF (COG).
+
+    Verwendet rasterio.shutil.copy (rasterio ist bereits Projekt-Abhängigkeit,
+    bringt GDAL mit) statt eines externen gdal_translate-Subprocess-Aufrufs -
+    funktioniert daher auch in der PyInstaller-EXE ohne zusätzliche Hidden-Imports.
+
+    Args:
+        input_path (Path): Pfad zum Quell-TIFF
+        output_path (Path): Zielpfad des COG
+        compression (str): Kompressionsverfahren
+        quality (int): JPEG-Qualität (nur bei compression='JPEG' relevant)
+
+    Returns:
+        Optional[Path]: Pfad zum erzeugten COG, oder None bei Fehler
+    """
+    try:
+        import rasterio
+        import rasterio.shutil as rio_shutil
+
+        creation_options = {
+            'COMPRESS': compression,
+            'BLOCKSIZE': COG_CONFIG['blocksize'],
+            'BIGTIFF': COG_CONFIG['bigtiff'],
+            'NUM_THREADS': COG_CONFIG['num_threads'],
+        }
+        if compression.upper() == 'JPEG':
+            creation_options['QUALITY'] = quality
+
+        with rasterio.open(input_path) as src:
+            rio_shutil.copy(src, str(output_path), driver='COG', **creation_options)
+
+        if not output_path.exists():
+            return None
+        return output_path
+
+    except Exception as e:
+        logger.error(f"  ✗ COG-Konvertierung fehlgeschlagen: {e}")
+        return None
 
 
 def create_thumbnail_from_cog(
@@ -214,16 +280,40 @@ def process_single_cog_file(
         
         single_file = input_files[0]
         logger.info(f"\n✓ Genau 1 Datei gefunden: {single_file.name}")
-        
+
         # Prüfe: Ist COG?
         logger.info(" Prüfe ob COG...")
         if not check_is_cog(single_file):
-            logger.error("  ✗ Datei ist KEIN Cloud Optimized GeoTIFF (COG)!")
-            logger.error(" Bitte konvertiere zu COG mit:")
-            logger.error(f"    gdal_translate -of COG -co COMPRESS=JPEG -co QUALITY=75 {single_file.name} output.tif")
-            return None
-        logger.info("  ✓ Ist COG")
-        
+            logger.info("  Datei ist kein COG, starte automatische Konvertierung...")
+            logger.info(f"  Kompression: {COG_CONFIG['compress']}, Qualität: {COG_CONFIG['quality']}")
+
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+            # Mosaike koennen im zweistelligen GB-Bereich liegen - vor dem Start
+            # pruefen ob genug freier Speicher fuer die konvertierte Kopie da ist.
+            required_bytes = single_file.stat().st_size * 2
+            if not has_enough_disk_space(output_dir, required_bytes):
+                logger.error(
+                    f"  ✗ Zu wenig freier Speicher in {output_dir} für die COG-Konvertierung "
+                    f"(benötigt: ~{required_bytes / 1024**3:.1f} GB)"
+                )
+                return None
+
+            converted_file = output_dir / f"{single_file.stem}_cog.tif"
+            if convert_to_cog(single_file, converted_file, COG_CONFIG['compress'], COG_CONFIG['quality']) is None:
+                logger.error("  ✗ COG-Konvertierung fehlgeschlagen")
+                return None
+
+            # Erneute COG-Validierung mit der bestehenden Pruefung
+            if not check_is_cog(converted_file):
+                logger.error("  ✗ Konvertierte Datei ist immer noch kein gültiges COG")
+                return None
+
+            logger.info(f"  ✓ COG erstellt: {converted_file.name}")
+            single_file = converted_file  # Original bleibt unveraendert, ab hier mit der Konvertierung weiterarbeiten
+        else:
+            logger.info("  ✓ Ist COG")
+
         # Prüfe: Ist 8-bit RGB (3 Bänder)?
         logger.info(" Prüfe ob 8-bit RGB (3 Bänder)...")
         if not check_is_8bit_rgb(single_file):

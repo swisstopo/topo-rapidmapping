@@ -33,6 +33,7 @@ from configuration import ProductType
 from utilities import file_handler
 from utilities import gdal_helpers
 from utilities import photo_processor
+from utilities import kml_generator
 import main_multipart_upload_via_api
 import util_publish_stac_fsdi
 
@@ -334,6 +335,73 @@ class TestAssetCreateTitle(unittest.TestCase):
     def test_unpassendes_muster_wirft_klare_valueerror_statt_attributeerror(self):
         with self.assertRaises(ValueError):
             util_publish_stac_fsdi.asset_create_title("ohne_erkennbares_muster.tif", None)
+
+
+# ============================================================
+#  utilities.kml_generator.query_stac_items_by_date
+#  Regressionstest: der serverseitige 'datetime'-Filter muss durch eine
+#  clientseitige Pruefung abgesichert sein (sonst landet bei fehlender
+#  Server-Unterstuetzung effektiv der gesamte Katalog im KML), und die
+#  Paginierung muss GET- und POST-'next'-Links korrekt bedienen.
+# ============================================================
+class TestQueryStacItemsByDate(unittest.TestCase):
+
+    def _feature(self, item_id, dt, has_ebn_asset=True):
+        assets = {"thumbnail.jpg": {"href": f"https://x/{item_id}/thumbnail.jpg"}}
+        if has_ebn_asset:
+            assets[f"{item_id}-ebn-photo.jpg"] = {"href": f"https://x/{item_id}/photo.jpg"}
+        return {
+            "id": item_id,
+            "properties": {"datetime": dt},
+            "geometry": {"type": "Point", "coordinates": [7.1, 46.1]},
+            "assets": assets,
+        }
+
+    def test_items_ausserhalb_des_datums_werden_clientseitig_verworfen(self):
+        # Simuliert eine STAC-API, deren 'datetime'-Filter serverseitig nicht greift:
+        # Seite 1 enthaelt ein Item vom falschen Tag und ein Overview-Item.
+        page1 = {
+            "features": [
+                self._feature("ram-2025-09-03t120000", "2025-09-03T12:00:00Z"),
+                self._feature("ram-2025-09-02t235900", "2025-09-02T23:59:00Z"),  # falscher Tag
+                self._feature("ram-2025-09-03t130000-overview", "2025-09-03T13:00:00Z"),  # overview
+            ],
+            "links": [{"rel": "next", "href": "https://x/search?page=2", "method": "GET"}],
+        }
+        page2 = {
+            "features": [self._feature("ram-2025-09-03t140000", "2025-09-03T14:00:00Z")],
+            "links": [],
+        }
+
+        mock_session = MagicMock()
+        mock_resp1 = MagicMock(); mock_resp1.json.return_value = page1
+        mock_resp2 = MagicMock(); mock_resp2.json.return_value = page2
+        mock_session.post.return_value = mock_resp1
+        mock_session.get.return_value = mock_resp2
+
+        with patch.object(kml_generator, "get_session", return_value=mock_session):
+            results = kml_generator.query_stac_items_by_date(
+                "https://x/api/stac/v0.9/", "coll", "2025-09-03", "ebn"
+            )
+
+        ids = sorted(r["item_id"] for r in results)
+        self.assertEqual(ids, ["ram-2025-09-03t120000", "ram-2025-09-03t140000"],
+                          "Items vom falschen Tag und Overview-Items duerfen nicht im Ergebnis landen")
+
+        # Erste Seite per POST (mit datetime-Filter im Body), zweite Seite per GET
+        # (da der 'next'-Link method=GET meldet) - vorher wurde faelschlicherweise
+        # immer gePOSTet.
+        mock_session.post.assert_called_once()
+        mock_session.get.assert_called_once_with("https://x/search?page=2")
+
+    def test_leeres_ergebnis_bei_fehlerhafter_anfrage(self):
+        mock_session = MagicMock()
+        mock_session.post.side_effect = RuntimeError("connection failed")
+        with patch.object(kml_generator, "get_session", return_value=mock_session):
+            results = kml_generator.query_stac_items_by_date(
+                "https://x/api/stac/v0.9/", "coll", "2025-09-03", "ebn"
+            )
+        self.assertEqual(results, [])
 
 
 if __name__ == "__main__":

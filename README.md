@@ -1073,6 +1073,7 @@ MIT
 - **Fehlende GPS-Daten (EBN/EBO) wie fehlender Timestamp behandelt**: Fotos ohne ermittelbare GPS-Koordinaten werden jetzt ebenfalls übersprungen statt ohne Position importiert zu werden, gleich protokolliert (Terminal + Log, Dateiname in der Verarbeitungszusammenfassung) wie beim fehlenden Timestamp
 - **Fix: `asset_create_title`**: wirft bei nicht erkennbarem Dateimuster eine klare `ValueError` statt eines `AttributeError`
 - **Log-Dateien**: werden jetzt in `logs/` statt im Hauptverzeichnis abgelegt, neue Namenskonvention `<stac-datum>_<produkttyp>_<importDatum>.log` (vorher `Log_<produkttyp>_<importDatum>.txt` im Hauptverzeichnis)
+- **Fix: KML/CSV-STAC-Abfrage (`kml_generator.query_stac_items_by_date`)**: Paginierung folgte bei einem GET-'next'-Link fälschlicherweise trotzdem mit POST weiter (konnte die Seite verpassen und die Paginierung vorzeitig abbrechen). Zusätzlich wird jedes Ergebnis jetzt clientseitig gegen das angefragte Datum geprüft — sollte der serverseitige `datetime`-Filter nicht greifen, landen dadurch keine Items anderer Tage mehr im KML/CSV, statt effektiv den ganzen Katalog zu verarbeiten. Ein ungewöhnlich hohes Seitenaufkommen für einen einzelnen Tag wird jetzt protokolliert
 
 ### v2.3 (2025-05)
 - **Kerberos-Proxy EXE-Fix**: 407-Fehler in der generierten EXE behoben (win32timezone + SSPI-Tunnel-Patch)

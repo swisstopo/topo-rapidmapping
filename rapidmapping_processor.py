@@ -940,8 +940,12 @@ def main():
         print("=" * 70 + "\n")
 
         # ── Log-Datei einrichten ──────────────────────────────────────────────
-        _log_ts       = datetime.now().strftime('%Y%m%d_%H%M%S')
-        _log_filename = f"Log_{product_type.value}_{_log_ts}.txt"
+        # Namenskonvention: <stac-datum>_<produkttyp>_<importDatum>.log
+        # z.B. logs/2025-09-03_ebn_20260908-143512.log
+        _logs_dir     = Path("logs")
+        _logs_dir.mkdir(exist_ok=True)
+        _log_ts       = datetime.now().strftime('%Y%m%d-%H%M%S')
+        _log_filename = _logs_dir / f"{timestamp_or_date}_{product_type.value}_{_log_ts}.log"
         _log_handler  = logging.FileHandler(_log_filename, encoding='utf-8')
         _log_handler.setLevel(logging.INFO)
         _log_handler.setFormatter(

@@ -374,8 +374,12 @@ Asset: ram-2024-07-15t23595900-ebn.txt
 
 #### GPS-Koordinaten Handling
 - **DMS → Dezimal-Konvertierung** (6 Dezimalstellen Präzision)
-- **Warnung bei fehlenden GPS-Daten**: Foto wird übersprungen
+- **Warnung bei fehlenden GPS-Daten**: Foto wird trotzdem importiert (ohne GPS-Position)
 - **KML**: Nur Fotos mit GPS-Daten werden eingebunden
+
+#### Zeitstempel-Handling
+- Zeitstempel wird aus EXIF (`DateTimeOriginal`) oder, falls nicht vorhanden, aus dem Dateinamen ermittelt
+- **Kein Timestamp ermittelbar (weder EXIF noch Dateiname)**: Foto wird **nicht** mit dem aktuellen Datum importiert, sondern übersprungen. Wird klar protokolliert (Terminal + Log-Datei), inklusive Dateiname, sowohl direkt beim Verarbeiten als auch gesammelt in der Verarbeitungszusammenfassung am Ende des Laufs
 
 ### 3. QDOP-DMC4 (4-Kanal DMC4-Bildstreifen)
 
@@ -634,6 +638,17 @@ Das Script gibt detailliertes Feedback:
 INFO:  ✓ Erfolgreiche Operation
 WARNING: ⚠ Warnung (nicht kritisch)
 ERROR: ✗ Fehler (kritisch)
+```
+
+### Log-Dateien
+
+Jeder Lauf schreibt zusätzlich zur Konsolenausgabe eine Log-Datei nach `logs/`
+(wird bei Bedarf automatisch angelegt). Namenskonvention:
+
+```
+logs/<stac-datum>_<produkttyp>_<importDatum>.log
+
+Beispiel: logs/2025-09-03_ebn_20260908-143512.log
 ```
 
 ### Log-Level anpassen
@@ -1051,8 +1066,9 @@ MIT
 - **GUI**: Formularbasierte Oberfläche (`0_GUI_rapidmapping_STACimport.py`) als Alternative zur CLI, baut dieselben CLI-Flags und läuft weiterhin über `rapidmapping_processor.py`/`.exe` als Subprocess
 - **QDOP-DMC4 COG-Optionen**: Neue Parameter `--cog-compress` / `--cog-quality` zur Steuerung der COG-Kompression (default: JPEG/85, vorher fix JPEG/75)
 - **Automatische COG-Konvertierung (QDOP RGB/NRG)**: Ist die Input-Datei kein COG, wird sie automatisch konvertiert (`utilities/mosaic_processor.convert_to_cog`, via `rasterio.shutil.copy`, keine neue Abhängigkeit, funktioniert in der EXE) statt den Lauf abzubrechen. Original bleibt unverändert, Kompression/Qualität aus `COG_CONFIG`, RGB und NRG werden gleich behandelt (beide JPEG-komprimiert). Vor der Konvertierung wird der freie Speicherplatz geprüft; die temporäre `*_cog.tif` wird nach erfolgreicher Publikation mit dem restlichen `temp/`-Verzeichnis gelöscht
-- **Fix: EXIF-Timestamp-Fallback**: `parse_exif_timestamp()` gibt `None` zurück statt auf das aktuelle Datum zurückzufallen, wenn weder EXIF noch Dateiname einen Timestamp liefern. Das Foto wird übersprungen (nicht mehr fälschlicherweise mit dem heutigen Datum in STAC importiert)
+- **Fix: EXIF-Timestamp-Fallback (EBN/EBO)**: `parse_exif_timestamp()` gibt `None` zurück statt auf das aktuelle Datum zurückzufallen, wenn weder EXIF noch Dateiname einen Timestamp liefern. Das Foto wird übersprungen (nicht mehr fälschlicherweise mit dem heutigen Datum in STAC importiert) und mit Dateiname klar protokolliert (Terminal + Log), sowohl direkt beim Verarbeiten als auch gesammelt in der Verarbeitungszusammenfassung
 - **Fix: `asset_create_title`**: wirft bei nicht erkennbarem Dateimuster eine klare `ValueError` statt eines `AttributeError`
+- **Log-Dateien**: werden jetzt in `logs/` statt im Hauptverzeichnis abgelegt, neue Namenskonvention `<stac-datum>_<produkttyp>_<importDatum>.log` (vorher `Log_<produkttyp>_<importDatum>.txt` im Hauptverzeichnis)
 
 ### v2.3 (2025-05)
 - **Kerberos-Proxy EXE-Fix**: 407-Fehler in der generierten EXE behoben (win32timezone + SSPI-Tunnel-Patch)

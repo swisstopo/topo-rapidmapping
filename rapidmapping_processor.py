@@ -118,6 +118,55 @@ def prompt_environment() -> str:
             logger.error("✗ Ungültige Auswahl. Bitte 1 oder 2 eingeben (oder Enter für INT).")
 
 
+def prompt_secrets_dir_if_missing() -> None:
+    """
+    Rettungsanker für den Klassiker: App laeuft nicht im selben Verzeichnis wie
+    der 'secrets'-Ordner (Credentials/Proxy-Config), typischerweise weil das
+    Arbeitsverzeichnis beim Start ein anderes ist als erwartet.
+
+    Fragt interaktiv nach dem korrekten Pfad und wechselt dorthin (chdir), damit
+    alle relativen 'secrets/...'-Zugriffe im restlichen Code (credentials.py,
+    proxy_handler.py) wieder funktionieren - ohne dass an mehreren Stellen im
+    Code der Pfad durchgereicht werden muss.
+    """
+    if Path("secrets").is_dir():
+        return
+    if os.environ.get('STAC_USERNAME') and os.environ.get('STAC_PASSWORD'):
+        return  # Credentials kommen aus Env-Vars, 'secrets/' wird nicht zwingend gebraucht
+
+    # logger statt print(): dessen StreamHandler faengt UnicodeEncodeError (z.B. bei
+    # Emoji auf einer Windows-Konsole mit cp1252-Codepage) intern ab statt abzustuerzen
+    # - print() hat diese Absicherung nicht. Der input()-Prompt selbst bleibt daher
+    # bewusst reines ASCII.
+    logger.info("=" * 70)
+    logger.info("  \U0001F913 SEGMENTATION FAULT (core dumped)... nur Spass. Hallo Simon! \U0001F44B")
+    logger.info("=" * 70)
+    logger.info(" Ich kann den 'secrets'-Ordner (Credentials + Proxy-Config) im")
+    logger.info(" aktuellen Arbeitsverzeichnis nicht finden. Vermutlich laeuft die")
+    logger.info(" App mal wieder nicht im selben Verzeichnis wie 'secrets/' ;-)")
+    logger.info(" Kein Grund zur Panik und kein Ticket noetig - gib mir einfach kurz")
+    logger.info(" den Pfad zum 'secrets'-Ordner, dann cd ich uns gemeinsam dahin:")
+    logger.info("   Beispiel Windows: C:\\oed\\temp\\rm\\secrets")
+    logger.info("   Beispiel Linux:   /home/simon/rm/secrets")
+
+    while True:
+        raw = input(" -> Pfad zum secrets-Ordner (Enter = abbrechen): ").strip().strip('"')
+        if not raw:
+            logger.warning("! Kein Pfad angegeben - bis zum naechsten Mal, Simon.")
+            return
+
+        candidate = Path(raw).expanduser()
+        if candidate.name.lower() != "secrets" and (candidate / "secrets").is_dir():
+            candidate = candidate / "secrets"  # übergeordneten Ordner angegeben
+
+        if candidate.is_dir():
+            os.chdir(candidate.parent)
+            logger.info(f"✓ Nice catch! Arbeitsverzeichnis gewechselt nach: {candidate.parent.resolve()}")
+            return
+
+        logger.error(f"✗ '{candidate}' existiert nicht oder ist kein Verzeichnis. Nochmal?")
+
+
 def prompt_input_directory():
     while True:
         print("\n Bitte Input-Verzeichnis angeben:")
@@ -822,6 +871,9 @@ def main():
             environment = "INT"
 
         if args.upload:
+            if not _is_full_cli:
+                prompt_secrets_dir_if_missing()
+
             logger.info("=" * 70)
             logger.info(f"CREDENTIALS ({environment})")
             logger.info("=" * 70)

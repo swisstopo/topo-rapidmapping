@@ -12,6 +12,7 @@ Ausführen:
 """
 
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -36,6 +37,7 @@ from utilities import photo_processor
 from utilities import kml_generator
 import main_multipart_upload_via_api
 import util_publish_stac_fsdi
+import rapidmapping_processor
 
 
 # ============================================================
@@ -402,6 +404,55 @@ class TestQueryStacItemsByDate(unittest.TestCase):
                 "https://x/api/stac/v0.9/", "coll", "2025-09-03", "ebn"
             )
         self.assertEqual(results, [])
+
+
+# ============================================================
+#  rapidmapping_processor.prompt_secrets_dir_if_missing
+#  Der "Simon"-Rettungsanker: App im falschen Arbeitsverzeichnis gestartet
+#  (kein 'secrets'-Ordner) -> interaktiv nach dem Pfad fragen und dorthin
+#  wechseln, statt erst spaeter mit einer unklaren Fehlermeldung abzubrechen.
+# ============================================================
+class TestPromptSecretsDirIfMissing(unittest.TestCase):
+
+    def setUp(self):
+        self._orig_cwd = os.getcwd()
+        self._tmp_root = tempfile.mkdtemp()
+        os.chdir(self._tmp_root)
+
+    def tearDown(self):
+        os.chdir(self._orig_cwd)
+        shutil.rmtree(self._tmp_root, ignore_errors=True)
+
+    def test_secrets_ordner_vorhanden_kein_prompt(self):
+        (Path(self._tmp_root) / "secrets").mkdir()
+        with patch("builtins.input") as mock_input:
+            rapidmapping_processor.prompt_secrets_dir_if_missing()
+        mock_input.assert_not_called()
+
+    def test_env_credentials_vorhanden_kein_prompt(self):
+        with patch.dict(os.environ, {"STAC_USERNAME": "u", "STAC_PASSWORD": "p"}):
+            with patch("builtins.input") as mock_input:
+                rapidmapping_processor.prompt_secrets_dir_if_missing()
+        mock_input.assert_not_called()
+
+    def test_gueltiger_pfad_wechselt_ins_uebergeordnete_arbeitsverzeichnis(self):
+        other_root = tempfile.mkdtemp()
+        secrets_dir = Path(other_root) / "secrets"
+        secrets_dir.mkdir()
+        try:
+            with patch.dict(os.environ, {"STAC_USERNAME": "", "STAC_PASSWORD": ""}):
+                with patch("builtins.input", return_value=str(secrets_dir)):
+                    rapidmapping_processor.prompt_secrets_dir_if_missing()
+            self.assertEqual(Path(os.getcwd()).resolve(), Path(other_root).resolve())
+        finally:
+            os.chdir(self._tmp_root)  # weg von other_root, bevor es geloescht wird
+            shutil.rmtree(other_root, ignore_errors=True)
+
+    def test_leere_eingabe_bricht_ohne_fehler_ab(self):
+        with patch.dict(os.environ, {"STAC_USERNAME": "", "STAC_PASSWORD": ""}):
+            with patch("builtins.input", return_value=""):
+                rapidmapping_processor.prompt_secrets_dir_if_missing()
+        self.assertEqual(Path(os.getcwd()).resolve(), Path(self._tmp_root).resolve())
 
 
 if __name__ == "__main__":

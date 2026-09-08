@@ -585,6 +585,21 @@ Das Tool erkennt danach automatisch dass Kerberos benötigt wird — keine weite
 - ODER Environment Variables setzen
 - Format prüfen (JSON muss gültig sein)
 
+### 'secrets'-Ordner nicht gefunden (falsches Arbeitsverzeichnis)
+
+Wird im interaktiven Modus (kein vollständiger `--product`/`--input`/`--timestamp`-Aufruf)
+kein `secrets/`-Ordner im aktuellen Verzeichnis gefunden und sind auch keine
+`STAC_USERNAME`/`STAC_PASSWORD`-Environment-Variablen gesetzt, fragt das Tool interaktiv
+nach dem korrekten Pfad zum `secrets`-Ordner und wechselt automatisch dorthin — kein
+manuelles Neustarten aus dem richtigen Verzeichnis nötig:
+
+```
+-> Pfad zum secrets-Ordner (Enter = abbrechen): C:\oed\temp\rm\secrets
+```
+
+Bei vollständigem CLI-Aufruf (Automation/Skripte) erscheint diese Nachfrage bewusst nicht
+— dort bricht das Tool wie gewohnt mit einer klaren Fehlermeldung ab (siehe oben).
+
 ### GPS-Daten fehlen
 ```
 ✗ Keine GPS-Daten ermittelbar — Bild wird NICHT in STAC importiert
@@ -1074,6 +1089,7 @@ MIT
 - **Fix: `asset_create_title`**: wirft bei nicht erkennbarem Dateimuster eine klare `ValueError` statt eines `AttributeError`
 - **Log-Dateien**: werden jetzt in `logs/` statt im Hauptverzeichnis abgelegt, neue Namenskonvention `<stac-datum>_<produkttyp>_<importDatum>.log` (vorher `Log_<produkttyp>_<importDatum>.txt` im Hauptverzeichnis)
 - **Fix: KML/CSV-STAC-Abfrage (`kml_generator.query_stac_items_by_date`)**: Paginierung folgte bei einem GET-'next'-Link fälschlicherweise trotzdem mit POST weiter (konnte die Seite verpassen und die Paginierung vorzeitig abbrechen). Zusätzlich wird jedes Ergebnis jetzt clientseitig gegen das angefragte Datum geprüft — sollte der serverseitige `datetime`-Filter nicht greifen, landen dadurch keine Items anderer Tage mehr im KML/CSV, statt effektiv den ganzen Katalog zu verarbeiten. Ein ungewöhnlich hohes Seitenaufkommen für einen einzelnen Tag wird jetzt protokolliert
+- **Interaktive Nachfrage bei fehlendem `secrets`-Ordner**: Im interaktiven Modus fragt das Tool jetzt nach dem korrekten Pfad und wechselt automatisch dorthin, statt erst später mit einer unklaren Fehlermeldung abzubrechen — hilfreich, wenn die App mal nicht im selben Verzeichnis wie `secrets/` gestartet wurde
 
 ### v2.3 (2025-05)
 - **Kerberos-Proxy EXE-Fix**: 407-Fehler in der generierten EXE behoben (win32timezone + SSPI-Tunnel-Patch)

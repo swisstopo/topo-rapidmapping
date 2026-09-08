@@ -20,6 +20,7 @@ from utilities.file_handler import (
     get_tif_files,
     get_file_size_mb
 )
+from utilities.gdal_helpers import GDAL_PERF_FLAGS, supports_progress
 
 logger = logging.getLogger(__name__)
 
@@ -210,16 +211,12 @@ def create_thumbnail_from_cog(
         logger.info(f"  → Thumbnail: {output_file.name} ({outsize_params[0] or 'auto'}x{outsize_params[1] or 'auto'} px)")
 
         # 3. Run gdal_translate with progress output if supported by this build
-        _help = subprocess.run(
-            ['gdal_translate', '--help'], capture_output=True, text=True
-        )
-        _progress_flag = ['-progress'] if '-progress' in _help.stdout + _help.stderr else []
+        _progress_flag = ['-progress'] if supports_progress('gdal_translate') else []
 
         result = subprocess.run(
             [
                 'gdal_translate',
-                '--config', 'NUM_THREADS', 'ALL_CPUS',
-                '--config', 'GDAL_CACHEMAX', '512',
+            ] + GDAL_PERF_FLAGS + [
                 '-of', 'JPEG',
                 '-outsize', outsize_params[0], outsize_params[1],
             ] + _progress_flag + [

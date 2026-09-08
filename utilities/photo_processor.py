@@ -28,6 +28,7 @@ from typing import Optional, Dict, List, Tuple
 from datetime import datetime
 from configuration import THUMBNAIL_CONFIG, ProductType, generate_item_name, generate_asset_name, get_product_config
 from utilities.file_handler import get_jpg_files
+from utilities.gdal_helpers import GDAL_PERF_FLAGS
 # publish_to_stac wird lazy importiert (innerhalb der Funktion) um zirkuläre
 # Imports zu vermeiden: util_publish_stac_fsdi → utilities → photo_processor
 
@@ -352,8 +353,7 @@ def _rotate_to_north_up(jpg_path: Path, angle_deg: float, quality: int = 85) -> 
         result = subprocess.run(
             [
                 'gdalwarp',
-                '--config', 'NUM_THREADS', 'ALL_CPUS',
-                '--config', 'GDAL_CACHEMAX', '512',
+            ] + GDAL_PERF_FLAGS + [
                 '-multi',
                 '-wm', '512',
                 '-of', 'JPEG',
@@ -954,8 +954,7 @@ def convert_tif_to_jpg_with_exif(
             warp_result = subprocess.run(
                 [
                     'gdalwarp',
-                    '--config', 'NUM_THREADS', 'ALL_CPUS',
-                    '--config', 'GDAL_CACHEMAX', '512',
+                ] + GDAL_PERF_FLAGS + [
                     '-multi',
                     '-wm', '512',
                     '-of', 'JPEG',
@@ -1008,8 +1007,7 @@ def convert_tif_to_jpg_with_exif(
         translate_result = subprocess.run(
             [
                 'gdal_translate',
-                '--config', 'NUM_THREADS', 'ALL_CPUS',
-                '--config', 'GDAL_CACHEMAX', '512',
+            ] + GDAL_PERF_FLAGS + [
                 '-of', 'JPEG',
                 '-co', f'QUALITY={quality}',
                 '-co', 'EXIF_THUMBNAIL=NO',
@@ -1447,8 +1445,7 @@ def resize_image_gdal(
             translate_result = subprocess.run(
                 [
                     'gdal_translate',
-                    '--config', 'NUM_THREADS', 'ALL_CPUS',
-                    '--config', 'GDAL_CACHEMAX', '512',
+                ] + GDAL_PERF_FLAGS + [
                     '-of', 'JPEG',
                     '-outsize', str(new_width), str(new_height),
                     str(input_file),

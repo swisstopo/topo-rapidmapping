@@ -48,6 +48,7 @@ from utilities.kml_generator import create_overview_kml
 from utilities.stac_publisher import publish_to_stac_wrapper
 from utilities.proxy_handler import initialize_proxy, get_configured_proxy_names
 from utilities.credentials import load_stac_credentials
+from utilities.gdal_helpers import GDAL_PERF_FLAGS, supports_progress
 # publish_to_stac importiert lazy (verhindert circular import)
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
@@ -241,26 +242,6 @@ def _ensure_ms_suffix(timestamp: str) -> str:
     return timestamp
 
 
-_GDAL_PROGRESS_SUPPORTED: dict = {}  # cache per executable, e.g. {'gdal_translate': True}
-
-# Performance flags injected into every GDAL command that processes pixels.
-# --config NUM_THREADS ALL_CPUS  → multi-thread COG tile/overview generation
-# --config GDAL_CACHEMAX 512     → 512 MB block cache (avoids repeated disk reads)
-_GDAL_PERF = [
-    "--config", "NUM_THREADS", "ALL_CPUS",
-    "--config", "GDAL_CACHEMAX", "512",
-]
-
-
-def _supports_progress(exe: str) -> bool:
-    """Probe once whether this GDAL build accepts -progress for the given tool."""
-    import subprocess as _sp
-    if exe not in _GDAL_PROGRESS_SUPPORTED:
-        r = _sp.run([exe, "--help"], capture_output=True, text=True)
-        _GDAL_PROGRESS_SUPPORTED[exe] = "-progress" in r.stdout or "-progress" in r.stderr
-    return _GDAL_PROGRESS_SUPPORTED[exe]
-
-
 def _poll_progress(output_path: "Path", ref_size_bytes: int, stop_event, interval: float = 0.5):
     """
     Background thread: polls output_path size and prints a live progress bar.
@@ -319,9 +300,9 @@ def _run_gdal(label: str, cmd: list, output_path: "Path | None" = None) -> bool:
     logger.info(f"  → {label}")
 
     # Inject performance flags right after the executable name
-    cmd = [cmd[0]] + _GDAL_PERF + cmd[1:]
+    cmd = [cmd[0]] + GDAL_PERF_FLAGS + cmd[1:]
 
-    if _supports_progress(cmd[0]):
+    if supports_progress(cmd[0]):
         full_cmd = cmd + ["-progress"]
         result = _sp.run(full_cmd, stderr=_sp.PIPE, text=True)
     else:
@@ -548,9 +529,8 @@ def process_dmc4_workflow(
                 files = sorted(str(f) for f in src_dir.glob("*.tif"))
                 logger.info(f"  → VRT Mosaic {label} ({len(files)} Streifen) ...")
                 r = _sp.run(
-                    ["gdalbuildvrt",
-                     "--config", "GDAL_CACHEMAX", "512",
-                     "-srcnodata", "0 0 0", str(vrt)] + files,
+                    ["gdalbuildvrt"] + GDAL_PERF_FLAGS +
+                    ["-srcnodata", "0 0 0", str(vrt)] + files,
                     stderr=_sp.PIPE, text=True
                 )
                 if r.returncode != 0:

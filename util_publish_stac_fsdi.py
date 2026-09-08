@@ -29,6 +29,8 @@ Uses proxy_handler.py for ALL proxy configuration.
 part_size_mb = 100
 attempts = 5
 
+logger = logging.getLogger(__name__)
+
 # CRITICAL: Import proxy_handler to use the centralized proxy configuration
 # This ensures we use the same proxy settings throughout the entire application
 try:
@@ -255,9 +257,9 @@ def upload_item(item_url, payload, username, password):
     )
 
     if response.status_code // 200 == 1:
-        print(f"ITEM object upload succeeded with status code {response.status_code}")
+        logger.info(f"ITEM object upload succeeded with status code {response.status_code}")
     else:
-        print(f"ITEM object upload failed with status code {response.status_code}")
+        logger.error(f"ITEM object upload failed with status code {response.status_code}")
 
 
 def create_asset(asset_url, payload, username, password):
@@ -274,10 +276,10 @@ def create_asset(asset_url, payload, username, password):
     )
 
     if response.status_code // 200 == 1:
-        print(f"ASSET object upload succeeded with status code {response.status_code}")
+        logger.info(f"ASSET object upload succeeded with status code {response.status_code}")
         return True
     else:
-        print(f"ASSET object upload failed with status code {response.status_code}")
+        logger.error(f"ASSET object upload failed with status code {response.status_code}")
         return False
 
 
@@ -353,7 +355,7 @@ def publish_to_stac(username, password, asset, item_name, collection, geocat_id,
         # Create ITEM if needed
         try:
             if asset_type == 'TIF':
-                print(f"ITEM object {item}: creating")
+                logger.info(f"ITEM object {item}: creating")
 
                 # Get bounds from GeoTIFF
                 with rasterio.open(os.path.join(raw_asset_path,asset)) as ds:
@@ -418,23 +420,23 @@ def publish_to_stac(username, password, asset, item_name, collection, geocat_id,
 
                 upload_item(stac_path + item_path, payload, username, password)
             else:
-                print(f"  ℹ Item-Erstellung übersprungen (kein Geometry für {asset_type})")
+                logger.info(f"  ℹ Item-Erstellung übersprungen (kein Geometry für {asset_type})")
 
         except Exception as e:
-            print(f"An error occurred creating object {item}: {e}")
+            logger.error(f"An error occurred creating object {item}: {e}")
 
         # Create ASSET
         if is_existing(f"{stac_scheme}://{stac_hostname}/{collection}/{item}/{asset}"):
-            print(f"ASSET object {asset}: exists ... overwriting")
+            logger.info(f"ASSET object {asset}: exists ... overwriting")
         else:
-            print(f"ASSET object {asset}: does not exist preparing...")
+            logger.info(f"ASSET object {asset}: does not exist preparing...")
 
         # Create asset payload
         payload = asset_create_json_payload(os.path.join(raw_asset_path,asset), asset_type, current, asset_title=asset_title)
 
         # Create Asset
         if not create_asset(stac_path + asset_path, payload, username, password):
-            print(f"ASSET object {asset}: creation FAILED")
+            logger.error(f"ASSET object {asset}: creation FAILED")
             return False
 
         # Determine environment
@@ -446,10 +448,10 @@ def publish_to_stac(username, password, asset, item_name, collection, geocat_id,
             username, password, force=True, verbose=False,
             proxy_config=PROXY_CONFIG  # Pass proxy config to multipart upload
         ):
-            print(f"ASSET object {asset}: upload FAILED")
+            logger.error(f"ASSET object {asset}: upload FAILED")
             return False
 
-        print(f"FSDI update done: {stac_scheme}://{stac_hostname}/{collection}/{item}/{asset}")
+        logger.info(f"FSDI update done: {stac_scheme}://{stac_hostname}/{collection}/{item}/{asset}")
         return True
 
     finally:

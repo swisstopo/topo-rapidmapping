@@ -406,6 +406,50 @@ class TestQueryStacItemsByDate(unittest.TestCase):
             )
         self.assertEqual(results, [])
 
+    def test_next_link_mit_merge_true_behaelt_collections_und_datetime_filter(self):
+        # Regressionstest fuer einen echten Bug (empirisch gegen die STAC-API von
+        # data.geo.admin.ch verifiziert): der 'next'-Link dieser API liefert
+        # "merge": true mit body={"cursor": ...}. Wird dieser body den
+        # urspruenglichen Request-Body ERSETZT statt hineingemergt, gehen
+        # collections/datetime/limit ab Seite 2 verloren - die zweite Anfrage
+        # durchsucht dann faktisch den gesamten Katalog statt nur den Tag.
+        page1 = {
+            "features": [self._feature("ram-2025-09-03t120000", "2025-09-03T12:00:00Z")],
+            "links": [{
+                "rel": "next", "href": "https://x/search",
+                "method": "POST", "merge": True,
+                "body": {"cursor": "cD0zNzc5NDkxNA=="},
+            }],
+        }
+        page2 = {
+            "features": [self._feature("ram-2025-09-03t130000", "2025-09-03T13:00:00Z")],
+            "links": [],
+        }
+
+        mock_session = MagicMock()
+        mock_resp1 = MagicMock(); mock_resp1.json.return_value = page1
+        mock_resp2 = MagicMock(); mock_resp2.json.return_value = page2
+        mock_session.post.side_effect = [mock_resp1, mock_resp2]
+
+        with patch.object(kml_generator, "get_session", return_value=mock_session):
+            results = kml_generator.query_stac_items_by_date(
+                "https://x/api/stac/v0.9/", "coll", "2025-09-03", "ebn"
+            )
+
+        self.assertEqual(
+            sorted(r["item_id"] for r in results),
+            ["ram-2025-09-03t120000", "ram-2025-09-03t130000"]
+        )
+
+        self.assertEqual(mock_session.post.call_count, 2)
+        second_call_body = mock_session.post.call_args_list[1].kwargs["json"]
+        self.assertEqual(second_call_body, {
+            "collections": ["coll"],
+            "datetime": "2025-09-03T00:00:00Z/2025-09-03T23:59:59Z",
+            "limit": 100,
+            "cursor": "cD0zNzc5NDkxNA==",
+        }, "cursor muss in den urspruenglichen Body gemergt werden, nicht ihn ersetzen")
+
 
 # ============================================================
 #  rapidmapping_processor.prompt_secrets_dir_if_missing

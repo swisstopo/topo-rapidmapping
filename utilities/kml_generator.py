@@ -27,12 +27,21 @@ def query_stac_items_by_date(
     Handles pagination to retrieve all results.
 
     Grenzt die Anfrage serverseitig über den STAC 'datetime'-Intervall-Filter auf den
-    angegebenen Tag ein (kein Scan des gesamten Katalogs). Da nicht jede STAC-API-Version
-    diesen Filter zwingend korrekt umsetzt, wird jedes Ergebnis zusätzlich clientseitig
-    gegen das angefragte Datum geprüft ('datetime'-Präfix) — Items ausserhalb des Tages
-    werden verworfen und gezählt, statt ungefiltert ins KML zu landen. Ein ungewöhnlich
-    hohes Seiten-/Trefferaufkommen für einen einzelnen Tag wird protokolliert, da das ein
-    Hinweis darauf wäre, dass der serverseitige Filter nicht greift.
+    angegebenen Tag ein (kein Scan des gesamten Katalogs) — empirisch gegen INT und
+    PROD verifiziert, dass der Filter korrekt auf Tagesebene greift, obwohl die
+    Landing-Page keine 'item-search'-Conformance-Klasse deklariert.
+
+    Wichtig bei der Paginierung: der 'next'-Link dieser API liefert "merge": true —
+    der body MUSS in den urspruenglichen Request-Body gemergt werden (nur der Cursor
+    kommt neu dazu), sonst gehen collections/datetime/limit ab Seite 2 verloren und
+    es wird faktisch der gesamte Katalog durchsucht (das war ein realer Bug hier,
+    nicht nur eine Vorsichtsmassnahme).
+
+    Als zusätzliches Sicherheitsnetz wird trotzdem jedes Ergebnis clientseitig gegen
+    das angefragte Datum geprüft ('datetime'-Präfix) — Items ausserhalb des Tages
+    werden verworfen und gezählt statt ungefiltert ins KML zu landen. Ein ungewöhnlich
+    hohes Seiten-/Trefferaufkommen für einen einzelnen Tag wird protokolliert, da das
+    auf ein erneutes Paginierungs- oder Filterproblem hindeuten würde.
 
     Args:
         stac_url:       Vollständige STAC-API-URL (endet auf /api/stac/v0.9/)
@@ -125,15 +134,24 @@ def query_stac_items_by_date(
 
             # Paginierung über den 'next'-Link (STAC API / OGC API Features Standard).
             # Je nach Server ist die naechste Seite ein GET (href bereits vollstaendig,
-            # kein body) oder ein POST mit neuem body — beide Faelle korrekt bedienen,
-            # statt wie zuvor bei GET-Links faelschlicherweise weiter zu POSTen.
+            # kein body) oder ein POST mit neuem body. Meldet der Link "merge": true
+            # (so bei dieser API), MUSS der body in den urspruenglichen Request-Body
+            # gemergt werden (nur der Cursor kommt neu dazu) — wird stattdessen der
+            # gesamte body durch {"cursor": ...} ERSETZT, gehen collections/datetime/
+            # limit verloren und ab Seite 2 wird faktisch der gesamte Katalog
+            # durchsucht (empirisch verifiziert: ohne Merge kommen ab Seite 2 Items
+            # von beliebigen Tagen zurueck, mit korrektem Merge bleibt der Datums-
+            # Filter erhalten).
             next_link = None
             for link in data.get("links", []):
                 if link.get("rel") == "next":
                     next_link    = link.get("href")
-                    next_body    = link.get("body")
-                    method       = (link.get("method") or ("POST" if next_body is not None else "GET")).upper()
-                    payload      = next_body
+                    next_body    = link.get("body") or {}
+                    method       = (link.get("method") or ("POST" if next_body else "GET")).upper()
+                    if link.get("merge") and isinstance(payload, dict):
+                        payload = {**payload, **next_body}
+                    else:
+                        payload = next_body
                     break
 
             if not next_link:

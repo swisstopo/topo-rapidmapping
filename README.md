@@ -615,18 +615,20 @@ Das Tool erkennt danach automatisch dass Kerberos benötigt wird — keine weite
 
 ### 'secrets'-Ordner nicht gefunden (falsches Arbeitsverzeichnis)
 
-Wird im interaktiven Modus (kein vollständiger `--product`/`--input`/`--timestamp`-Aufruf)
-kein `secrets/`-Ordner im aktuellen Verzeichnis gefunden und sind auch keine
+Wird kein `secrets/`-Ordner im aktuellen Verzeichnis gefunden und sind auch keine
 `STAC_USERNAME`/`STAC_PASSWORD`-Environment-Variablen gesetzt, fragt das Tool interaktiv
 nach dem korrekten Pfad zum `secrets`-Ordner und wechselt automatisch dorthin — kein
-manuelles Neustarten aus dem richtigen Verzeichnis nötig:
+manuelles Neustarten aus dem richtigen Verzeichnis nötig. Das gilt sowohl im Dialog-Modus
+als auch bei vollständigem CLI-Aufruf (`--product`/`--input`/`--timestamp` alle gesetzt),
+da auch ein voller CLI-Aufruf in der Praxis meist von Hand im Terminal gestartet wird:
 
 ```
 -> Pfad zum secrets-Ordner (Enter = abbrechen): C:\oed\temp\rm\secrets
 ```
 
-Bei vollständigem CLI-Aufruf (Automation/Skripte) erscheint diese Nachfrage bewusst nicht
-— dort bricht das Tool wie gewohnt mit einer klaren Fehlermeldung ab (siehe oben).
+Für einen echt unbeaufsichtigten/automatisierten Lauf ohne Person am Terminal
+(z.B. Scheduled Task) `STAC_USERNAME`/`STAC_PASSWORD` als Environment-Variablen setzen —
+dann wird gar nicht erst geprüft, ob `secrets/` existiert.
 
 ### GPS-Daten fehlen
 ```
@@ -1126,7 +1128,7 @@ MIT
 - **Log-Dateien**: werden jetzt in `logs/` statt im Hauptverzeichnis abgelegt, neue Namenskonvention `<stac-datum>_<produkttyp>_<importDatum>.log` (vorher `Log_<produkttyp>_<importDatum>.txt` im Hauptverzeichnis)
 - **Fix: KML/CSV-STAC-Abfrage (`kml_generator.query_stac_items_by_date`)**: Paginierung folgte bei einem GET-'next'-Link fälschlicherweise trotzdem mit POST weiter (konnte die Seite verpassen und die Paginierung vorzeitig abbrechen). Zusätzlich wird jedes Ergebnis jetzt clientseitig gegen das angefragte Datum geprüft — sollte der serverseitige `datetime`-Filter nicht greifen, landen dadurch keine Items anderer Tage mehr im KML/CSV, statt effektiv den ganzen Katalog zu verarbeiten. Ein ungewöhnlich hohes Seitenaufkommen für einen einzelnen Tag wird jetzt protokolliert
 - **Fix: KML/CSV-Paginierung verlor Datums-/Collection-Filter ab Seite 2**: Der `next`-Link dieser STAC-API liefert `"merge": true` mit `body: {"cursor": ...}` — der Code ersetzte den kompletten Request-Body dadurch, statt den Cursor hineinzumergen. Ab Seite 2 gingen `collections`/`datetime`/`limit` verloren, wodurch faktisch der gesamte Katalog durchsucht wurde (empirisch gegen INT und PROD verifiziert: ohne Merge liefert Seite 2 Items beliebiger Tage). Das clientseitige Datums-Sicherheitsnetz (siehe oben) hielt das Endergebnis zwar korrekt, aber auf Kosten unnötig vieler Seiten/Treffer
-- **Interaktive Nachfrage bei fehlendem `secrets`-Ordner**: Im interaktiven Modus fragt das Tool jetzt nach dem korrekten Pfad und wechselt automatisch dorthin, statt erst später mit einer unklaren Fehlermeldung abzubrechen — hilfreich, wenn die App mal nicht im selben Verzeichnis wie `secrets/` gestartet wurde
+- **Interaktive Nachfrage bei fehlendem `secrets`-Ordner**: Das Tool fragt jetzt nach dem korrekten Pfad und wechselt automatisch dorthin, statt erst später mit einer unklaren Fehlermeldung abzubrechen — hilfreich, wenn die App mal nicht im selben Verzeichnis wie `secrets/` gestartet wurde. Gilt sowohl im Dialog-Modus als auch bei vollständigem CLI-Aufruf (zunächst nur im Dialog-Modus, dann auf Wunsch erweitert, da auch ein voller CLI-Aufruf meist von Hand gestartet wird); nur bei Credentials aus Environment-Variablen entfällt der Check ganz
 - **Dynamische Multipart-Upload-Part-Grösse**: `util_publish_stac_fsdi.py` berechnet die Part-Grösse jetzt aus der Asset-Grösse (Ziel ~90 Parts), statt die feste 250-MB-Grösse zu verwenden — verhindert, dass sehr grosse Assets (> ca. 24.4 GB) am 100-Parts-Limit der STAC-API scheitern. Für normal grosse Assets bleibt die Part-Grösse unverändert bei 250 MB
 - **Fix: falscher "Installation fehlgeschlagen"-Abbruch in `pyinstaller_onedir.bat`/`pyinstaller_onefile.bat`**: Die Erfolgsprüfung nach `pip install pyinstaller`/`pip install -r requirements.txt` stand verschachtelt in einem bereits geöffneten `if %errorlevel%`-Block — `%errorlevel%` wird darin beim Parsen des äusseren Blocks einmalig ausgewertet, bevor `pip install` überhaupt läuft, und blieb dadurch immer auf dem alten (fehlerhaften) Wert stehen. Das Skript meldete deshalb *immer* einen Fehlschlag, sobald PyInstaller/rasterio initial fehlte — auch wenn `pip install` sichtbar erfolgreich war. Behoben durch eine frische, nicht verschachtelte Prüfung direkt nach der Installation
 - **Fix: UnicodeEncodeError im Multipart-Upload-Fortschrittsbalken**: `main_multipart_upload_via_api.py` reconfiguriert stdout/stderr jetzt auf UTF-8, statt bei fehlender echter Konsole (z.B. GUI-Subprocess) an den Fortschrittsbalken-Zeichen (█ ░ ✓) abzustürzen — der Upload selbst war davon zwar nicht betroffen, aber der Absturz verschleierte den tatsächlichen Erfolg

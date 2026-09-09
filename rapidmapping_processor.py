@@ -851,8 +851,7 @@ def main():
             environment = "INT"
 
         if args.upload:
-            if not _is_full_cli:
-                prompt_secrets_dir_if_missing()
+            prompt_secrets_dir_if_missing()
 
             logger.info("=" * 70)
             logger.info(f"CREDENTIALS ({environment})")

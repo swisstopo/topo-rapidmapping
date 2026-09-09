@@ -499,11 +499,13 @@ class TestPromptSecretsDirIfMissing(unittest.TestCase):
                 rapidmapping_processor.prompt_secrets_dir_if_missing()
         self.assertEqual(Path(os.getcwd()).resolve(), Path(self._tmp_root).resolve())
 
-    def test_voller_cli_aufruf_ueberspringt_prompt_und_bricht_sauber_ab(self):
-        # Bei vollstaendigem CLI-Aufruf (--product/--input/--timestamp alle gesetzt,
-        # wie bei einem automatisierten/unbeaufsichtigten Lauf) darf main() NIE auf
-        # input() warten - stattdessen wie bisher sauber mit Fehlercode abbrechen,
-        # sobald load_stac_credentials() mangels 'secrets/' und Env-Vars fehlschlaegt.
+    def test_voller_cli_aufruf_ruft_prompt_ebenfalls_auf_wenn_secrets_fehlen(self):
+        # Ein voller CLI-Aufruf (--product/--input/--timestamp alle gesetzt) wird in
+        # der Praxis meistens trotzdem interaktiv von einem Menschen im Terminal
+        # gestartet (z.B. per rapidmapping_processor.exe --product ... --input ...).
+        # Der Secrets-Check muss deshalb IMMER laufen, nicht nur im Dialog-Modus -
+        # sonst landet man beim falschen Arbeitsverzeichnis direkt im kryptischen
+        # "Keine Credentials gefunden"-Fehler statt beim hilfreichen Prompt.
         fake_argv = [
             'rapidmapping_processor.py',
             '--product', 'ebn',
@@ -512,15 +514,35 @@ class TestPromptSecretsDirIfMissing(unittest.TestCase):
         ]
         with patch.dict(os.environ, {"STAC_USERNAME": "", "STAC_PASSWORD": ""}), \
              patch.object(sys, 'argv', fake_argv), \
-             patch.object(rapidmapping_processor, 'prompt_secrets_dir_if_missing') as mock_prompt, \
+             patch.object(rapidmapping_processor, 'prompt_secrets_dir_if_missing') as mock_prompt:
+            rapidmapping_processor.main()
+
+        mock_prompt.assert_called_once()
+
+    def test_voller_cli_aufruf_ruft_prompt_nicht_auf_wenn_secrets_vorhanden(self):
+        # Umgekehrter Fall: 'secrets/' existiert bereits - main() darf im vollen
+        # CLI-Modus dann nicht unnoetig auf Eingabe warten. Die eigentliche
+        # "existiert schon -> kein Prompt"-Logik liegt in
+        # prompt_secrets_dir_if_missing() selbst (siehe deren eigene Tests); hier
+        # wird nur sichergestellt, dass main() die Funktion weiterhin tatsaechlich
+        # aufruft (Aufruf allein loest ohne fehlenden Ordner keinen input() aus).
+        (Path(self._tmp_root) / "secrets").mkdir()
+        fake_argv = [
+            'rapidmapping_processor.py',
+            '--product', 'ebn',
+            '--input', str(Path(self._tmp_root) / 'input'),
+            '--timestamp', '2025-09-03',
+        ]
+        with patch.dict(os.environ, {"STAC_USERNAME": "", "STAC_PASSWORD": ""}), \
+             patch.object(sys, 'argv', fake_argv), \
              patch('builtins.input', side_effect=AssertionError(
-                 "main() darf im vollen CLI-Modus nie auf Eingabe warten"
+                 "kein Prompt noetig - 'secrets/' existiert bereits"
              )):
             exit_code = rapidmapping_processor.main()
 
-        mock_prompt.assert_not_called()
-        self.assertEqual(exit_code, 1,
-                          "muss wegen fehlender Credentials sauber mit Fehlercode abbrechen")
+        # Credentials-Datei fehlt weiterhin (nur der Ordner wurde angelegt) ->
+        # main() bricht sauber ab, aber ohne je input() aufzurufen.
+        self.assertEqual(exit_code, 1)
 
 
 # ============================================================

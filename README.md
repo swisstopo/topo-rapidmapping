@@ -1,5 +1,7 @@
 # Swisstopo Rapid Mapping Processor 2.0 RC
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/swisstopo/topo-rapidmapping)
+
 Automatisiertes System für die Publikation von Rapid Mapping Daten auf der FSDI STAC Plattform.
 
 ## Übersicht
@@ -23,31 +25,31 @@ in einem einzigen, benutzerfreundlichen Workflow mit automatischer Proxy-Erkennu
 - **Batch-Upload**: Einzelbilder werden sequenziell hochgeladen
 - **Error Handling**: Robuste Fehlerbehandlung mit detaillierten Logs
 
-## Entwicklungs-Workflow: Integrationsbranch (INT)
+## Entwicklungs-Workflow: Integrationsbranch (int)
 
-Änderungen gehen **nicht** direkt nach `main`. Der `INT`-Branch dient als gemeinsamer Staging-Bereich:
+Änderungen gehen **nicht** direkt nach `main`. Der `int`-Branch dient als gemeinsamer Staging-Bereich:
 
 ```
-dein-branch  →  INT  →  main
+dein-branch  →  int  →  main
   (PR, squash merge)   (PR, merge commit)
 ```
 
 ### Ablauf
 
-1. Branch von `INT` erstellen (nicht von `main`) und Änderungen vornehmen.
-2. Pull Request gegen `INT` öffnen und mit **Squash Merge** mergen.
-3. Vor dem Weiterführen nach `main` muss die Testsuite gegen `INT` grün sein:
+1. Branch von `int` erstellen (nicht von `main`) und Änderungen vornehmen.
+2. Pull Request gegen `int` öffnen und mit **Squash Merge** mergen.
+3. Vor dem Weiterführen nach `main` muss die Testsuite gegen `int` grün sein:
    ```bash
    python -m unittest test_functions -v
    ```
    (aktuell 48 Tests: Konfiguration, Foto-/Mosaik-/GDAL-Verarbeitung, KML/STAC-Abfragen, Secrets-Prompt, Multipart-Upload-Part-Grösse — siehe `test_functions.py`)
-4. Sind die Tests grün und stimmt das Ergebnis, Pull Request von `INT` → `main` öffnen und mit regulärem **Merge Commit** mergen.
+4. Sind die Tests grün und stimmt das Ergebnis, Pull Request von `int` → `main` öffnen und mit regulärem **Merge Commit** mergen.
 
-### Warum Squash Merge für branch → INT, aber ein Merge Commit für INT → main?
+### Warum Squash Merge für branch → int, aber ein Merge Commit für int → main?
 
-Während der Integration sammelt ein Feature-Branch oft viele kleine Commits ("Tippfehler behoben", "nochmal versuchen" usw.). Squash Merge fasst sie zu einem sauberen Commit auf `INT` zusammen, sodass dessen Historie pro Feature lesbar bleibt.
+Während der Integration sammelt ein Feature-Branch oft viele kleine Commits ("Tippfehler behoben", "nochmal versuchen" usw.). Squash Merge fasst sie zu einem sauberen Commit auf `int` zusammen, sodass dessen Historie pro Feature lesbar bleibt.
 
-Bis `INT` nach `main` gemerged wird, enthält er typischerweise mehrere solcher bereits gesquashter Commits aus unabhängigen PRs. Würde man auch *diesen* Merge squashen, würden all diese Commits zu einem einzigen Commit auf `main` verflacht und die PR-Zuordnung in der permanenten Produktions-Historie ginge verloren. Ein regulärer Merge Commit erhält stattdessen jeden einzelnen (bereits gesquashten) PR-Commit auf `main`, protokolliert aber trotzdem den Integrationspunkt.
+Bis `int` nach `main` gemerged wird, enthält er typischerweise mehrere solcher bereits gesquashter Commits aus unabhängigen PRs. Würde man auch *diesen* Merge squashen, würden all diese Commits zu einem einzigen Commit auf `main` verflacht und die PR-Zuordnung in der permanenten Produktions-Historie ginge verloren. Ein regulärer Merge Commit erhält stattdessen jeden einzelnen (bereits gesquashten) PR-Commit auf `main`, protokolliert aber trotzdem den Integrationspunkt.
 
 ## Projektstruktur
 

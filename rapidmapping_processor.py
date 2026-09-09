@@ -140,12 +140,12 @@ def prompt_secrets_dir_if_missing() -> None:
     # - print() hat diese Absicherung nicht. Der input()-Prompt selbst bleibt daher
     # bewusst reines ASCII.
     logger.info("=" * 70)
-    logger.info("  \U0001F913 SEGMENTATION FAULT (core dumped)... nur Spass. Hallo Simon! \U0001F44B")
+    logger.info("  \U0001F913 Hallo Simon! \U0001F44B")
     logger.info("=" * 70)
     logger.info(" Ich kann den 'secrets'-Ordner (Credentials + Proxy-Config) im")
     logger.info(" aktuellen Arbeitsverzeichnis nicht finden. Vermutlich laeuft die")
     logger.info(" App mal wieder nicht im selben Verzeichnis wie 'secrets/' ;-)")
-    logger.info(" Kein Grund zur Panik und kein Ticket noetig - gib mir einfach kurz")
+    logger.info(" Kein Grund zur Panik - gib einfach kurz")
     logger.info(" den Pfad zum 'secrets'-Ordner, dann cd ich uns gemeinsam dahin:")
     logger.info("   Beispiel Windows: C:\\oed\\temp\\rm\\secrets")
     logger.info("   Beispiel Linux:   /home/simon/rm/secrets")

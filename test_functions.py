@@ -455,6 +455,29 @@ class TestPromptSecretsDirIfMissing(unittest.TestCase):
                 rapidmapping_processor.prompt_secrets_dir_if_missing()
         self.assertEqual(Path(os.getcwd()).resolve(), Path(self._tmp_root).resolve())
 
+    def test_voller_cli_aufruf_ueberspringt_prompt_und_bricht_sauber_ab(self):
+        # Bei vollstaendigem CLI-Aufruf (--product/--input/--timestamp alle gesetzt,
+        # wie bei einem automatisierten/unbeaufsichtigten Lauf) darf main() NIE auf
+        # input() warten - stattdessen wie bisher sauber mit Fehlercode abbrechen,
+        # sobald load_stac_credentials() mangels 'secrets/' und Env-Vars fehlschlaegt.
+        fake_argv = [
+            'rapidmapping_processor.py',
+            '--product', 'ebn',
+            '--input', str(Path(self._tmp_root) / 'input'),
+            '--timestamp', '2025-09-03',
+        ]
+        with patch.dict(os.environ, {"STAC_USERNAME": "", "STAC_PASSWORD": ""}), \
+             patch.object(sys, 'argv', fake_argv), \
+             patch.object(rapidmapping_processor, 'prompt_secrets_dir_if_missing') as mock_prompt, \
+             patch('builtins.input', side_effect=AssertionError(
+                 "main() darf im vollen CLI-Modus nie auf Eingabe warten"
+             )):
+            exit_code = rapidmapping_processor.main()
+
+        mock_prompt.assert_not_called()
+        self.assertEqual(exit_code, 1,
+                          "muss wegen fehlender Credentials sauber mit Fehlercode abbrechen")
+
 
 # ============================================================
 #  util_publish_stac_fsdi.publish_to_stac -> dynamische Multipart-Part-Groesse

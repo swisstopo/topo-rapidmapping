@@ -138,7 +138,12 @@ python -c "import PyInstaller" >nul 2>&1
 if %errorlevel% neq 0 (
     echo   ⚠ PyInstaller nicht gefunden - installiere...
     pip install pyinstaller
-    if %errorlevel% neq 0 (echo   ✗ PyInstaller Installation fehlgeschlagen! && pause && exit /b 1)
+)
+python -c "import PyInstaller" >nul 2>&1
+if %errorlevel% neq 0 (
+    echo   ✗ PyInstaller Installation fehlgeschlagen!
+    pause
+    exit /b 1
 )
 echo   ✓ PyInstaller verfügbar
 
@@ -146,7 +151,12 @@ python -c "import rasterio" >nul 2>&1
 if %errorlevel% neq 0 (
     echo   ⚠ rasterio nicht gefunden - installiere requirements.txt...
     pip install -r requirements.txt
-    if %errorlevel% neq 0 (echo   ✗ Requirements Installation fehlgeschlagen! && pause && exit /b 1)
+)
+python -c "import rasterio" >nul 2>&1
+if %errorlevel% neq 0 (
+    echo   ✗ Requirements Installation fehlgeschlagen!
+    pause
+    exit /b 1
 )
 echo   ✓ rasterio verfügbar
 

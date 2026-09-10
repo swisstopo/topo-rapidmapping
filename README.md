@@ -1033,6 +1033,12 @@ python util_stac_delete_ram.py
 
 ## Generate Executable binaries / EXE  ( for now: WINDOWS only)
 
+**Wichtig:** Die EXE muss auf einer **BUREAUT-Maschine** (Bundes-Arbeitsplatz) generiert werden.
+Nur dort ist die Windows-/Netzwerk-Umgebung vorhanden, gegen die PyInstaller die
+Proxy-Bibliotheken bündelt. Wird die EXE auf einer anderen Maschine gebaut, funktioniert
+die automatische Proxy-Erkennung (System-Proxy, Kerberos/SSPI, VPN-Detection) im
+erzeugten Binary nicht.
+
 The WINDOWS version was created with pyinstaller. [quite a thing](https://stackoverflow.com/questions/56472933/pyinstaller-executable-fails).
 Solution steps
 

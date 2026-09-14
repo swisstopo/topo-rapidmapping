@@ -616,19 +616,31 @@ Das Tool erkennt danach automatisch dass Kerberos benötigt wird — keine weite
 ### 'secrets'-Ordner nicht gefunden (falsches Arbeitsverzeichnis)
 
 Wird kein `secrets/`-Ordner im aktuellen Verzeichnis gefunden und sind auch keine
-`STAC_USERNAME`/`STAC_PASSWORD`-Environment-Variablen gesetzt, fragt das Tool interaktiv
-nach dem korrekten Pfad zum `secrets`-Ordner und wechselt automatisch dorthin — kein
-manuelles Neustarten aus dem richtigen Verzeichnis nötig. Das gilt sowohl im Dialog-Modus
-als auch bei vollständigem CLI-Aufruf (`--product`/`--input`/`--timestamp` alle gesetzt),
-da auch ein voller CLI-Aufruf in der Praxis meist von Hand im Terminal gestartet wird:
+`STAC_USERNAME`/`STAC_PASSWORD`-Environment-Variablen gesetzt, verhält sich das Tool je
+nach Modus unterschiedlich:
+
+**Dialog-Modus** (kein vollständiger CLI-Aufruf): fragt interaktiv nach dem korrekten
+Pfad zum `secrets`-Ordner und wechselt automatisch dorthin — kein manuelles Neustarten
+aus dem richtigen Verzeichnis nötig:
 
 ```
 -> Pfad zum secrets-Ordner (Enter = abbrechen): C:\oed\temp\rm\secrets
 ```
 
-Für einen echt unbeaufsichtigten/automatisierten Lauf ohne Person am Terminal
-(z.B. Scheduled Task) `STAC_USERNAME`/`STAC_PASSWORD` als Environment-Variablen setzen —
-dann wird gar nicht erst geprüft, ob `secrets/` existiert.
+**Vollständiger CLI-Aufruf** (`--product`/`--input`/`--timestamp` alle gesetzt, z.B.
+Scheduled Task ohne Person am Terminal): fragt NICHT interaktiv nach, sondern gibt die
+Meldung aus und bricht sofort mit Exit-Code 1 ab — ein `input()`-Prompt würde in einem
+unbeaufsichtigten Lauf sonst unbemerkt für immer auf Eingabe warten.
+
+Für diesen Fall den Pfad stattdessen direkt mitgeben, entweder per Parameter:
+```bash
+python rapidmapping_processor.py --secrets-dir C:\oed\temp\rm\secrets --product ebn --input /data --timestamp 2025-09-03
+```
+oder per Environment-Variablen (dann wird gar nicht erst geprüft, ob `secrets/` existiert):
+```bash
+set STAC_USERNAME=your_username
+set STAC_PASSWORD=your_password
+```
 
 ### GPS-Daten fehlen
 ```
@@ -907,6 +919,9 @@ python rapidmapping_processor.py --product qdop-dmc4 --input /data/dmc4 --timest
 python rapidmapping_processor.py --proxy direct --product ebn --input /data --timestamp 2025-09-03
 python rapidmapping_processor.py --proxy system --product ebn --input /data --timestamp 2025-09-03
 python rapidmapping_processor.py --proxy BVCOL  --product ebn --input /data --timestamp 2025-09-03
+
+# secrets-Ordner an anderem Ort (z.B. Scheduled Task, secrets nicht im Arbeitsverzeichnis)
+python rapidmapping_processor.py --secrets-dir C:\oed\temp\rm\secrets --product ebn --input /data --timestamp 2025-09-03
 ```
 
 ### Parameter-Übersicht
@@ -922,6 +937,7 @@ python rapidmapping_processor.py --proxy BVCOL  --product ebn --input /data --ti
 | `--debug` | Flag | Sequentiell + volles Logging |
 | `--cog-compress` | `JPEG`, `LZW`, `DEFLATE`, `ZSTD`, `WEBP`, `NONE` | COG-Kompressionsverfahren, nur für `qdop-dmc4` (default: `JPEG`) |
 | `--cog-quality` | `1`-`100` | JPEG-Qualität für COG, nur bei `--cog-compress JPEG` (default: `85`) |
+| `--secrets-dir` | Pfad | Pfad zum `secrets`-Ordner, falls nicht im aktuellen Arbeitsverzeichnis (default: `secrets/`) |
 
 ### Debug-Modus direkt im Code setzen
 

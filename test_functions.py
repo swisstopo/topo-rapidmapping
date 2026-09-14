@@ -501,11 +501,10 @@ class TestPromptSecretsDirIfMissing(unittest.TestCase):
 
     def test_voller_cli_aufruf_ruft_prompt_ebenfalls_auf_wenn_secrets_fehlen(self):
         # Ein voller CLI-Aufruf (--product/--input/--timestamp alle gesetzt) wird in
-        # der Praxis meistens trotzdem interaktiv von einem Menschen im Terminal
-        # gestartet (z.B. per rapidmapping_processor.exe --product ... --input ...).
-        # Der Secrets-Check muss deshalb IMMER laufen, nicht nur im Dialog-Modus -
-        # sonst landet man beim falschen Arbeitsverzeichnis direkt im kryptischen
-        # "Keine Credentials gefunden"-Fehler statt beim hilfreichen Prompt.
+        # der Praxis meistens unbeaufsichtigt gestartet (z.B. Scheduled Task). Der
+        # Secrets-Check muss deshalb IMMER laufen, nicht nur im Dialog-Modus - aber
+        # mit interactive=False, damit dabei nicht auf Eingabe gewartet wird
+        # (siehe test_voller_cli_aufruf_bricht_ohne_input_ab weiter unten).
         fake_argv = [
             'rapidmapping_processor.py',
             '--product', 'ebn',
@@ -517,7 +516,37 @@ class TestPromptSecretsDirIfMissing(unittest.TestCase):
              patch.object(rapidmapping_processor, 'prompt_secrets_dir_if_missing') as mock_prompt:
             rapidmapping_processor.main()
 
-        mock_prompt.assert_called_once()
+        mock_prompt.assert_called_once_with(interactive=False)
+
+    def test_voller_cli_aufruf_bricht_ohne_input_ab_wenn_secrets_fehlen(self):
+        # Kernaenderung: im vollen CLI-Modus wird bei fehlendem 'secrets'-Ordner
+        # NICHT mehr interaktiv nachgefragt (ein input() wuerde in einem
+        # unbeaufsichtigten Lauf, z.B. Scheduled Task, unbemerkt haengen bleiben).
+        # Stattdessen gibt das Tool die Meldung aus und beendet sich sauber mit
+        # Exit-Code 1.
+        fake_argv = [
+            'rapidmapping_processor.py',
+            '--product', 'ebn',
+            '--input', str(Path(self._tmp_root) / 'input'),
+            '--timestamp', '2025-09-03',
+        ]
+        with patch.dict(os.environ, {"STAC_USERNAME": "", "STAC_PASSWORD": ""}), \
+             patch.object(sys, 'argv', fake_argv), \
+             patch('builtins.input', side_effect=AssertionError(
+                 "voller CLI-Aufruf darf nicht interaktiv nach dem Pfad fragen"
+             )):
+            exit_code = rapidmapping_processor.main()
+
+        self.assertEqual(exit_code, 1)
+
+    def test_dialog_modus_fragt_weiterhin_interaktiv_nach(self):
+        # Gegenprobe: im Dialog-Modus (kein voller CLI-Aufruf) bleibt das bisherige
+        # Verhalten erhalten - es wird interaktiv nach dem Pfad gefragt.
+        with patch.dict(os.environ, {"STAC_USERNAME": "", "STAC_PASSWORD": ""}):
+            with patch("builtins.input", return_value="") as mock_input:
+                result = rapidmapping_processor.prompt_secrets_dir_if_missing(interactive=True)
+        mock_input.assert_called_once()
+        self.assertFalse(result)
 
     def test_voller_cli_aufruf_ruft_prompt_nicht_auf_wenn_secrets_vorhanden(self):
         # Umgekehrter Fall: 'secrets/' existiert bereits - main() darf im vollen
@@ -543,6 +572,79 @@ class TestPromptSecretsDirIfMissing(unittest.TestCase):
         # Credentials-Datei fehlt weiterhin (nur der Ordner wurde angelegt) ->
         # main() bricht sauber ab, aber ohne je input() aufzurufen.
         self.assertEqual(exit_code, 1)
+
+
+# ============================================================
+#  rapidmapping_processor.use_secrets_dir / --secrets-dir
+#  Expliziter Pfad zum 'secrets'-Ordner via CLI-Parameter - Alternative zum
+#  interaktiven Prompt bzw. zum unbeaufsichtigten Abbruch (siehe oben).
+# ============================================================
+class TestUseSecretsDir(unittest.TestCase):
+
+    def setUp(self):
+        self._orig_cwd = os.getcwd()
+        self._tmp_root = tempfile.mkdtemp()
+        os.chdir(self._tmp_root)
+
+    def tearDown(self):
+        os.chdir(self._orig_cwd)
+        shutil.rmtree(self._tmp_root, ignore_errors=True)
+
+    def test_gueltiger_secrets_pfad_wechselt_ins_elternverzeichnis(self):
+        other_root = tempfile.mkdtemp()
+        secrets_dir = Path(other_root) / "secrets"
+        secrets_dir.mkdir()
+        try:
+            result = rapidmapping_processor.use_secrets_dir(str(secrets_dir))
+            self.assertTrue(result)
+            self.assertEqual(Path(os.getcwd()).resolve(), Path(other_root).resolve())
+        finally:
+            os.chdir(self._tmp_root)
+            shutil.rmtree(other_root, ignore_errors=True)
+
+    def test_uebergeordneter_pfad_wird_ebenfalls_akzeptiert(self):
+        other_root = tempfile.mkdtemp()
+        (Path(other_root) / "secrets").mkdir()
+        try:
+            result = rapidmapping_processor.use_secrets_dir(other_root)
+            self.assertTrue(result)
+            self.assertEqual(Path(os.getcwd()).resolve(), Path(other_root).resolve())
+        finally:
+            os.chdir(self._tmp_root)
+            shutil.rmtree(other_root, ignore_errors=True)
+
+    def test_nicht_existierender_pfad_gibt_false_zurueck_ohne_chdir(self):
+        result = rapidmapping_processor.use_secrets_dir(
+            str(Path(self._tmp_root) / "does-not-exist")
+        )
+        self.assertFalse(result)
+        self.assertEqual(Path(os.getcwd()).resolve(), Path(self._tmp_root).resolve())
+
+    def test_voller_cli_aufruf_mit_secrets_dir_fragt_nicht_interaktiv(self):
+        other_root = tempfile.mkdtemp()
+        (Path(other_root) / "secrets").mkdir()
+        try:
+            fake_argv = [
+                'rapidmapping_processor.py',
+                '--product', 'ebn',
+                '--input', str(Path(self._tmp_root) / 'input'),
+                '--timestamp', '2025-09-03',
+                '--secrets-dir', str(Path(other_root) / "secrets"),
+            ]
+            with patch.dict(os.environ, {"STAC_USERNAME": "", "STAC_PASSWORD": ""}), \
+                 patch.object(sys, 'argv', fake_argv), \
+                 patch('builtins.input', side_effect=AssertionError(
+                     "--secrets-dir angegeben - darf nicht interaktiv nachfragen"
+                 )):
+                exit_code = rapidmapping_processor.main()
+
+            # Credentials-Datei fehlt weiterhin (nur der Ordner wurde angelegt) ->
+            # main() bricht sauber ab, aber ohne je input() aufzurufen und ohne
+            # den interaktiven 'secrets'-Prompt zu bemuehen.
+            self.assertEqual(exit_code, 1)
+        finally:
+            os.chdir(self._tmp_root)
+            shutil.rmtree(other_root, ignore_errors=True)
 
 
 # ============================================================

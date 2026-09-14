@@ -119,21 +119,34 @@ def prompt_environment() -> str:
             logger.error("✗ Ungültige Auswahl. Bitte 1 oder 2 eingeben (oder Enter für INT).")
 
 
-def prompt_secrets_dir_if_missing() -> None:
+def prompt_secrets_dir_if_missing(interactive: bool = True) -> bool:
     """
     Rettungsanker für den Klassiker: App laeuft nicht im selben Verzeichnis wie
     der 'secrets'-Ordner (Credentials/Proxy-Config), typischerweise weil das
     Arbeitsverzeichnis beim Start ein anderes ist als erwartet.
 
-    Fragt interaktiv nach dem korrekten Pfad und wechselt dorthin (chdir), damit
-    alle relativen 'secrets/...'-Zugriffe im restlichen Code (credentials.py,
-    proxy_handler.py) wieder funktionieren - ohne dass an mehreren Stellen im
-    Code der Pfad durchgereicht werden muss.
+    Im Dialog-Modus (interactive=True) wird interaktiv nach dem korrekten Pfad
+    gefragt und dorthin gewechselt (chdir), damit alle relativen
+    'secrets/...'-Zugriffe im restlichen Code (credentials.py, proxy_handler.py)
+    wieder funktionieren - ohne dass an mehreren Stellen im Code der Pfad
+    durchgereicht werden muss.
+
+    Im vollständigen CLI-Modus (interactive=False, z.B. Scheduled Task ohne
+    Person am Terminal) wird NICHT nach einem Pfad gefragt - ein input()
+    würde dort unbemerkt auf Eingabe warten. Stattdessen wird die Meldung
+    ausgegeben und False zurückgegeben, damit das Programm sauber beendet
+    werden kann. Für diesen Fall den Pfad stattdessen via --secrets-dir
+    übergeben.
+
+    Returns:
+        bool: True wenn ein gültiger 'secrets'-Ordner gefunden/gesetzt wurde
+              (oder Credentials aus Env-Vars kommen) und weitergemacht werden
+              kann, False wenn das Programm beendet werden soll.
     """
     if Path("secrets").is_dir():
-        return
+        return True
     if os.environ.get('STAC_USERNAME') and os.environ.get('STAC_PASSWORD'):
-        return  # Credentials kommen aus Env-Vars, 'secrets/' wird nicht zwingend gebraucht
+        return True  # Credentials kommen aus Env-Vars, 'secrets/' wird nicht zwingend gebraucht
 
     # logger statt print(): dessen StreamHandler faengt UnicodeEncodeError (z.B. bei
     # Emoji auf einer Windows-Konsole mit cp1252-Codepage) intern ab statt abzustuerzen
@@ -145,6 +158,13 @@ def prompt_secrets_dir_if_missing() -> None:
     logger.info(" Ich kann den 'secrets'-Ordner (Credentials + Proxy-Config) im")
     logger.info(" aktuellen Arbeitsverzeichnis nicht finden. Vermutlich laeuft die")
     logger.info(" App mal wieder nicht im selben Verzeichnis wie 'secrets/' ;-)")
+
+    if not interactive:
+        logger.error("✗ Kein 'secrets'-Ordner gefunden - Abbruch (CLI-Modus fragt nicht interaktiv nach).")
+        logger.error("  Bitte --secrets-dir <Pfad> angeben, oder im Verzeichnis ausführen,")
+        logger.error("  das den 'secrets'-Ordner enthält, oder STAC_USERNAME/STAC_PASSWORD setzen.")
+        return False
+
     logger.info(" Kein Grund zur Panik - gib einfach kurz")
     logger.info(" den Pfad zum 'secrets'-Ordner, dann cd ich uns gemeinsam dahin:")
     logger.info("   Beispiel Windows: C:\\oed\\temp\\rm\\secrets")
@@ -154,7 +174,7 @@ def prompt_secrets_dir_if_missing() -> None:
         raw = input(" -> Pfad zum secrets-Ordner (Enter = abbrechen): ").strip().strip('"')
         if not raw:
             logger.warning("! Kein Pfad angegeben - bis zum naechsten Mal, Simon.")
-            return
+            return False
 
         candidate = Path(raw).expanduser()
         if candidate.name.lower() != "secrets" and (candidate / "secrets").is_dir():
@@ -163,9 +183,35 @@ def prompt_secrets_dir_if_missing() -> None:
         if candidate.is_dir():
             os.chdir(candidate.parent)
             logger.info(f"✓ Nice catch! Arbeitsverzeichnis gewechselt nach: {candidate.parent.resolve()}")
-            return
+            return True
 
         logger.error(f"✗ '{candidate}' existiert nicht oder ist kein Verzeichnis. Nochmal?")
+
+
+def use_secrets_dir(secrets_dir: str) -> bool:
+    """
+    Wechselt ins Arbeitsverzeichnis für einen explizit via --secrets-dir
+    angegebenen 'secrets'-Ordner (chdir auf dessen Elternverzeichnis), damit
+    alle relativen 'secrets/...'-Zugriffe im restlichen Code weiter greifen.
+
+    Akzeptiert sowohl den Pfad zum 'secrets'-Ordner selbst als auch zu dessen
+    Elternverzeichnis (gleiche Toleranz wie prompt_secrets_dir_if_missing).
+
+    Returns:
+        bool: True bei Erfolg, False wenn der Pfad nicht existiert (Meldung
+              wurde bereits geloggt).
+    """
+    candidate = Path(secrets_dir).expanduser()
+    if candidate.name.lower() != "secrets" and (candidate / "secrets").is_dir():
+        candidate = candidate / "secrets"
+
+    if not candidate.is_dir():
+        logger.error(f"✗ --secrets-dir '{secrets_dir}' existiert nicht oder ist kein Verzeichnis.")
+        return False
+
+    os.chdir(candidate.parent)
+    logger.info(f"✓ secrets-Ordner (CLI): {candidate.resolve()}")
+    return True
 
 
 def prompt_input_directory():
@@ -792,6 +838,7 @@ def main():
     python rapidmapping_processor.py --proxy direct --product ebn --input /data --timestamp 2025-09-03
     python rapidmapping_processor.py --proxy system --product ebn --input /data --timestamp 2025-09-03
     python rapidmapping_processor.py --proxy BVCOL  --product ebn --input /data --timestamp 2025-09-03
+    python rapidmapping_processor.py --secrets-dir C:\\oed\\temp\\rm\\secrets --product ebn --input /data --timestamp 2025-09-03
         """
     )
     # Basic options
@@ -827,6 +874,11 @@ def main():
     parser.add_argument('--cog-quality', dest='cog_quality', type=int, default=COG_CONFIG['quality'],
                         metavar='1-100',
                         help=f"JPEG-Qualität für COG, nur bei --cog-compress JPEG (default: {COG_CONFIG['quality']})")
+    parser.add_argument('--secrets-dir', dest='secrets_dir', default=None,
+                        metavar='VERZEICHNIS',
+                        help=('Pfad zum secrets-Ordner (stac_credentials.json / proxy_config.json), '
+                              'falls das Skript nicht im gleichen Verzeichnis wie secrets/ gestartet wird. '
+                              'Default: secrets/ im aktuellen Arbeitsverzeichnis'))
 
     args = parser.parse_args()
     _is_full_cli = bool(args.product and args.input_dir and args.timestamp)
@@ -851,7 +903,11 @@ def main():
             environment = "INT"
 
         if args.upload:
-            prompt_secrets_dir_if_missing()
+            if args.secrets_dir:
+                if not use_secrets_dir(args.secrets_dir):
+                    return 1
+            elif not prompt_secrets_dir_if_missing(interactive=not _is_full_cli):
+                return 1
 
             logger.info("=" * 70)
             logger.info(f"CREDENTIALS ({environment})")

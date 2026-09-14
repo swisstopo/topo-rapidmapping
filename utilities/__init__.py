@@ -8,6 +8,7 @@ Module:
 - mosaic_processor: Orthophoto-Mosaic-Erstellung
 - photo_processor: Einzelbild-Verarbeitung
 - stac_publisher: STAC-Publikation
+- create_index: Jahres-Übersichtsindex (KML/GPKG/CSV) über RAM/KRY STAC-Items
 """
 
 __version__ = "1.0.0"

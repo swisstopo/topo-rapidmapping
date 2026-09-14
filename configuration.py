@@ -258,6 +258,27 @@ def get_collection_url(item_name: str, hostname: str = None) -> str:
     return f"https://{STAC_HOSTNAME}/{STAC_COLLECTION}/{item_name}/"
 
 
+def get_browser_item_url(item_name: str, hostname: str = None) -> str:
+    """
+    Generiert eine Deep-Link-URL in den STAC-Browser für ein Item.
+
+    Folgt der Standard-Hash-Routing-Konvention des STAC-Browsers
+    (#/collections/<collection>/items/<item>), wie er unter
+    https://data.geo.admin.ch/browser/index.html läuft. Zentral hier
+    definiert, damit ein abweichendes Routing an einer Stelle korrigiert
+    werden kann.
+
+    Args:
+        item_name (str): STAC Item Name
+        hostname (str, optional): STAC Hostname (default: STAC_HOSTNAME)
+
+    Returns:
+        str: URL zum Item im STAC-Browser
+    """
+    host = hostname or STAC_HOSTNAME
+    return f"https://{host}/browser/#/collections/{STAC_COLLECTION}/items/{item_name}"
+
+
 def validate_item_name_format(item_name: str) -> bool:
     """
     Validiert Item Name Format für Einzelbilder (YYYY-###-CAPITALLETTERS).

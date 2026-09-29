@@ -26,6 +26,23 @@ def query_stac_items_by_date(
     Queries STAC for all items of a specific date and product using pure requests.
     Handles pagination to retrieve all results.
 
+    Grenzt die Anfrage serverseitig über den STAC 'datetime'-Intervall-Filter auf den
+    angegebenen Tag ein (kein Scan des gesamten Katalogs) — empirisch gegen INT und
+    PROD verifiziert, dass der Filter korrekt auf Tagesebene greift, obwohl die
+    Landing-Page keine 'item-search'-Conformance-Klasse deklariert.
+
+    Wichtig bei der Paginierung: der 'next'-Link dieser API liefert "merge": true —
+    der body MUSS in den urspruenglichen Request-Body gemergt werden (nur der Cursor
+    kommt neu dazu), sonst gehen collections/datetime/limit ab Seite 2 verloren und
+    es wird faktisch der gesamte Katalog durchsucht (das war ein realer Bug hier,
+    nicht nur eine Vorsichtsmassnahme).
+
+    Als zusätzliches Sicherheitsnetz wird trotzdem jedes Ergebnis clientseitig gegen
+    das angefragte Datum geprüft ('datetime'-Präfix) — Items ausserhalb des Tages
+    werden verworfen und gezählt statt ungefiltert ins KML zu landen. Ein ungewöhnlich
+    hohes Seiten-/Trefferaufkommen für einen einzelnen Tag wird protokolliert, da das
+    auf ein erneutes Paginierungs- oder Filterproblem hindeuten würde.
+
     Args:
         stac_url:       Vollständige STAC-API-URL (endet auf /api/stac/v0.9/)
         collection:     STAC Collection Name
@@ -35,6 +52,8 @@ def query_stac_items_by_date(
     Returns:
         List[Dict] mit Keys: item_id, asset_url, thumbnail_url, lat, lon, timestamp
     """
+    MAX_PAGES = 50  # grosszuegig fuer einen einzelnen Tag; mehr ist ein starkes Indiz
+                    # dass der serverseitige 'datetime'-Filter nicht (mehr) greift
     try:
         session = get_session()
         search_endpoint = f"{stac_url.rstrip('/')}/search"
@@ -47,15 +66,20 @@ def query_stac_items_by_date(
             "datetime": f"{date}T00:00:00Z/{date}T23:59:59Z",
             "limit": 100
         }
+        method = "POST"
 
         all_results = []
         page_count = 0
+        skipped_other_date = 0
 
         while True:
             page_count += 1
             logger.info(f" Fetching page {page_count}...")
 
-            resp = session.post(search_endpoint, json=payload)
+            if method == "GET":
+                resp = session.get(search_endpoint)
+            else:
+                resp = session.post(search_endpoint, json=payload)
             resp.raise_for_status()
             data = resp.json()
 
@@ -71,8 +95,17 @@ def query_stac_items_by_date(
                 assets = feature.get("assets", {})
                 if not any(product_suffix in k for k in assets):
                     continue
-                props    = feature.get("properties", {})
-                geometry = feature.get("geometry", {})
+
+                props     = feature.get("properties", {})
+                geometry  = feature.get("geometry", {})
+                timestamp = props.get('datetime', '')
+
+                # Clientseitiges Sicherheitsnetz: nur Items vom angefragten Tag
+                # übernehmen, unabhängig davon ob der serverseitige 'datetime'-Filter
+                # tatsächlich greift (sonst würde effektiv der gesamte Katalog verarbeitet).
+                if not timestamp.startswith(date):
+                    skipped_other_date += 1
+                    continue
 
                 asset_url     = None
                 thumbnail_url = None
@@ -90,8 +123,6 @@ def query_stac_items_by_date(
                     if len(coords) >= 2:
                         lon, lat = coords[0], coords[1]
 
-                timestamp = props.get('datetime', '')
-
                 all_results.append({
                     'item_id':       item_id,
                     'asset_url':     asset_url,
@@ -101,26 +132,47 @@ def query_stac_items_by_date(
                     'timestamp':     timestamp
                 })
 
-            # Paginierung
+            # Paginierung über den 'next'-Link (STAC API / OGC API Features Standard).
+            # Je nach Server ist die naechste Seite ein GET (href bereits vollstaendig,
+            # kein body) oder ein POST mit neuem body. Meldet der Link "merge": true
+            # (so bei dieser API), MUSS der body in den urspruenglichen Request-Body
+            # gemergt werden (nur der Cursor kommt neu dazu) — wird stattdessen der
+            # gesamte body durch {"cursor": ...} ERSETZT, gehen collections/datetime/
+            # limit verloren und ab Seite 2 wird faktisch der gesamte Katalog
+            # durchsucht (empirisch verifiziert: ohne Merge kommen ab Seite 2 Items
+            # von beliebigen Tagen zurueck, mit korrektem Merge bleibt der Datums-
+            # Filter erhalten).
             next_link = None
             for link in data.get("links", []):
                 if link.get("rel") == "next":
-                    next_link = link.get("href")
-                    next_body = link.get("body")
-                    if next_body:
+                    next_link    = link.get("href")
+                    next_body    = link.get("body") or {}
+                    method       = (link.get("method") or ("POST" if next_body else "GET")).upper()
+                    if link.get("merge") and isinstance(payload, dict):
+                        payload = {**payload, **next_body}
+                    else:
                         payload = next_body
-                    elif link.get("method") == "GET":
-                        search_endpoint = next_link
-                        payload = None
                     break
 
             if not next_link:
                 logger.info(f" No more pages (fetched {page_count} pages total)")
                 break
 
-            if page_count > 1000:
-                logger.warning(f" Reached safety limit of 1000 pages, stopping")
+            search_endpoint = next_link
+
+            if page_count >= MAX_PAGES:
+                logger.warning(
+                    f" ! Sicherheitslimit von {MAX_PAGES} Seiten erreicht für einen "
+                    f"einzelnen Tag — ungewöhnlich viele Treffer. Möglicherweise greift "
+                    f"der serverseitige 'datetime'-Filter nicht (stoppe Paginierung)."
+                )
                 break
+
+        if skipped_other_date:
+            logger.warning(
+                f" ! {skipped_other_date} Item(s) ausserhalb von {date} clientseitig "
+                f"herausgefiltert (STAC 'datetime'-Filter evtl. serverseitig unwirksam)"
+            )
 
         logger.info(f"  ✓ {len(all_results)} Items found across {page_count} pages")
         return all_results

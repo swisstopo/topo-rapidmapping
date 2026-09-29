@@ -25,11 +25,14 @@ PREFIX = "ram"  # Rapid Mapping Prefix
 # COG Creation Settings
 COG_CONFIG = {
     'compress': 'JPEG',
-    'quality': 75,
+    'quality': 85,
     'blocksize': 256,
     'bigtiff': 'YES',
     'num_threads': 'ALL_CPUS'
 }
+
+# Im GUI/CLI wählbare COMPRESS-Verfahren für die COG-Erzeugung.
+COG_COMPRESS_OPTIONS = ['JPEG', 'LZW', 'DEFLATE', 'ZSTD', 'WEBP', 'NONE']
 
 # Mosaic Creation Settings
 MOSAIC_CONFIG = {
@@ -105,6 +108,29 @@ def get_product_config(product_type: ProductType) -> Dict[str, Any]:
     }
 
     return configs[product_type]
+
+
+def normalize_cli_timestamp(raw: str) -> str:
+    """
+    Normalisiert einen kompakten Zeitstempel auf das Standardformat
+    YYYY-MM-DDthhmmss[cc].
+
+    Args:
+        raw (str): Roher CLI-Input, z.B. '20210729t125959' oder '20210729'
+
+    Returns:
+        str: Normalisierter Zeitstempel, z.B. '2021-07-29t125959'
+    """
+    # Bereits normalisiert, wenn Bindestriche vorhanden sind
+    if '-' in raw:
+        return raw
+    # Match kompakt: YYYYMMDD[tHHMMSS[CC]]
+    m = re.match(r'^(\d{4})(\d{2})(\d{2})(t\d{6}(\d{2})?)?$', raw)
+    if m:
+        date_part = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+        time_part = m.group(4) or ''
+        return date_part + time_part
+    return raw  # unverändert zurückgeben; validate_timestamp weist es später ab
 
 
 def validate_timestamp(timestamp: str) -> bool:
@@ -230,6 +256,27 @@ def get_collection_url(item_name: str, hostname: str = None) -> str:
     """
     host = hostname or STAC_HOSTNAME
     return f"https://{STAC_HOSTNAME}/{STAC_COLLECTION}/{item_name}/"
+
+
+def get_browser_item_url(item_name: str, hostname: str = None) -> str:
+    """
+    Generiert eine Deep-Link-URL in den STAC-Browser für ein Item.
+
+    Folgt der Standard-Hash-Routing-Konvention des STAC-Browsers
+    (#/collections/<collection>/items/<item>), wie er unter
+    https://data.geo.admin.ch/browser/index.html läuft. Zentral hier
+    definiert, damit ein abweichendes Routing an einer Stelle korrigiert
+    werden kann.
+
+    Args:
+        item_name (str): STAC Item Name
+        hostname (str, optional): STAC Hostname (default: STAC_HOSTNAME)
+
+    Returns:
+        str: URL zum Item im STAC-Browser
+    """
+    host = hostname or STAC_HOSTNAME
+    return f"https://{host}/browser/#/collections/{STAC_COLLECTION}/items/{item_name}"
 
 
 def validate_item_name_format(item_name: str) -> bool:

@@ -166,4 +166,5 @@ cython_debug/
 secrets/
 temp/
 results/
+output/
 rclone/

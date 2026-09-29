@@ -28,9 +28,11 @@ from configuration import (
     ProductType,
     get_product_config,
     validate_timestamp,
+    normalize_cli_timestamp,
     generate_item_name,
     generate_asset_name,
     get_collection_url,
+    COG_CONFIG,
     STAC_COLLECTION,
     GEOCAT_ID,
     STAC_SCHEME,
@@ -46,6 +48,7 @@ from utilities.kml_generator import create_overview_kml
 from utilities.stac_publisher import publish_to_stac_wrapper
 from utilities.proxy_handler import initialize_proxy, get_configured_proxy_names
 from utilities.credentials import load_stac_credentials
+from utilities.gdal_helpers import GDAL_PERF_FLAGS, supports_progress
 # publish_to_stac importiert lazy (verhindert circular import)
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
@@ -114,6 +117,101 @@ def prompt_environment() -> str:
             return "PROD"
         else:
             logger.error("✗ Ungültige Auswahl. Bitte 1 oder 2 eingeben (oder Enter für INT).")
+
+
+def prompt_secrets_dir_if_missing(interactive: bool = True) -> bool:
+    """
+    Rettungsanker für den Klassiker: App laeuft nicht im selben Verzeichnis wie
+    der 'secrets'-Ordner (Credentials/Proxy-Config), typischerweise weil das
+    Arbeitsverzeichnis beim Start ein anderes ist als erwartet.
+
+    Im Dialog-Modus (interactive=True) wird interaktiv nach dem korrekten Pfad
+    gefragt und dorthin gewechselt (chdir), damit alle relativen
+    'secrets/...'-Zugriffe im restlichen Code (credentials.py, proxy_handler.py)
+    wieder funktionieren - ohne dass an mehreren Stellen im Code der Pfad
+    durchgereicht werden muss.
+
+    Im vollständigen CLI-Modus (interactive=False, z.B. Scheduled Task ohne
+    Person am Terminal) wird NICHT nach einem Pfad gefragt - ein input()
+    würde dort unbemerkt auf Eingabe warten. Stattdessen wird die Meldung
+    ausgegeben und False zurückgegeben, damit das Programm sauber beendet
+    werden kann. Für diesen Fall den Pfad stattdessen via --secrets-dir
+    übergeben.
+
+    Returns:
+        bool: True wenn ein gültiger 'secrets'-Ordner gefunden/gesetzt wurde
+              (oder Credentials aus Env-Vars kommen) und weitergemacht werden
+              kann, False wenn das Programm beendet werden soll.
+    """
+    if Path("secrets").is_dir():
+        return True
+    if os.environ.get('STAC_USERNAME') and os.environ.get('STAC_PASSWORD'):
+        return True  # Credentials kommen aus Env-Vars, 'secrets/' wird nicht zwingend gebraucht
+
+    # logger statt print(): dessen StreamHandler faengt UnicodeEncodeError (z.B. bei
+    # Emoji auf einer Windows-Konsole mit cp1252-Codepage) intern ab statt abzustuerzen
+    # - print() hat diese Absicherung nicht. Der input()-Prompt selbst bleibt daher
+    # bewusst reines ASCII.
+    logger.info("=" * 70)
+    logger.info("  \U0001F913 Hallo Simon! \U0001F44B")
+    logger.info("=" * 70)
+    logger.info(" Ich kann den 'secrets'-Ordner (Credentials + Proxy-Config) im")
+    logger.info(" aktuellen Arbeitsverzeichnis nicht finden. Vermutlich laeuft die")
+    logger.info(" App mal wieder nicht im selben Verzeichnis wie 'secrets/' ;-)")
+
+    if not interactive:
+        logger.error("✗ Kein 'secrets'-Ordner gefunden - Abbruch (CLI-Modus fragt nicht interaktiv nach).")
+        logger.error("  Bitte --secrets-dir <Pfad> angeben, oder im Verzeichnis ausführen,")
+        logger.error("  das den 'secrets'-Ordner enthält, oder STAC_USERNAME/STAC_PASSWORD setzen.")
+        return False
+
+    logger.info(" Kein Grund zur Panik - gib einfach kurz")
+    logger.info(" den Pfad zum 'secrets'-Ordner, dann cd ich uns gemeinsam dahin:")
+    logger.info("   Beispiel Windows: C:\\oed\\temp\\rm\\secrets")
+    logger.info("   Beispiel Linux:   /home/simon/rm/secrets")
+
+    while True:
+        raw = input(" -> Pfad zum secrets-Ordner (Enter = abbrechen): ").strip().strip('"')
+        if not raw:
+            logger.warning("! Kein Pfad angegeben - bis zum naechsten Mal, Simon.")
+            return False
+
+        candidate = Path(raw).expanduser()
+        if candidate.name.lower() != "secrets" and (candidate / "secrets").is_dir():
+            candidate = candidate / "secrets"  # übergeordneten Ordner angegeben
+
+        if candidate.is_dir():
+            os.chdir(candidate.parent)
+            logger.info(f"✓ Nice catch! Arbeitsverzeichnis gewechselt nach: {candidate.parent.resolve()}")
+            return True
+
+        logger.error(f"✗ '{candidate}' existiert nicht oder ist kein Verzeichnis. Nochmal?")
+
+
+def use_secrets_dir(secrets_dir: str) -> bool:
+    """
+    Wechselt ins Arbeitsverzeichnis für einen explizit via --secrets-dir
+    angegebenen 'secrets'-Ordner (chdir auf dessen Elternverzeichnis), damit
+    alle relativen 'secrets/...'-Zugriffe im restlichen Code weiter greifen.
+
+    Akzeptiert sowohl den Pfad zum 'secrets'-Ordner selbst als auch zu dessen
+    Elternverzeichnis (gleiche Toleranz wie prompt_secrets_dir_if_missing).
+
+    Returns:
+        bool: True bei Erfolg, False wenn der Pfad nicht existiert (Meldung
+              wurde bereits geloggt).
+    """
+    candidate = Path(secrets_dir).expanduser()
+    if candidate.name.lower() != "secrets" and (candidate / "secrets").is_dir():
+        candidate = candidate / "secrets"
+
+    if not candidate.is_dir():
+        logger.error(f"✗ --secrets-dir '{secrets_dir}' existiert nicht oder ist kein Verzeichnis.")
+        return False
+
+    os.chdir(candidate.parent)
+    logger.info(f"✓ secrets-Ordner (CLI): {candidate.resolve()}")
+    return True
 
 
 def prompt_input_directory():
@@ -190,26 +288,6 @@ def _ensure_ms_suffix(timestamp: str) -> str:
     return timestamp
 
 
-_GDAL_PROGRESS_SUPPORTED: dict = {}  # cache per executable, e.g. {'gdal_translate': True}
-
-# Performance flags injected into every GDAL command that processes pixels.
-# --config NUM_THREADS ALL_CPUS  → multi-thread COG tile/overview generation
-# --config GDAL_CACHEMAX 512     → 512 MB block cache (avoids repeated disk reads)
-_GDAL_PERF = [
-    "--config", "NUM_THREADS", "ALL_CPUS",
-    "--config", "GDAL_CACHEMAX", "512",
-]
-
-
-def _supports_progress(exe: str) -> bool:
-    """Probe once whether this GDAL build accepts -progress for the given tool."""
-    import subprocess as _sp
-    if exe not in _GDAL_PROGRESS_SUPPORTED:
-        r = _sp.run([exe, "--help"], capture_output=True, text=True)
-        _GDAL_PROGRESS_SUPPORTED[exe] = "-progress" in r.stdout or "-progress" in r.stderr
-    return _GDAL_PROGRESS_SUPPORTED[exe]
-
-
 def _poll_progress(output_path: "Path", ref_size_bytes: int, stop_event, interval: float = 0.5):
     """
     Background thread: polls output_path size and prints a live progress bar.
@@ -268,9 +346,9 @@ def _run_gdal(label: str, cmd: list, output_path: "Path | None" = None) -> bool:
     logger.info(f"  → {label}")
 
     # Inject performance flags right after the executable name
-    cmd = [cmd[0]] + _GDAL_PERF + cmd[1:]
+    cmd = [cmd[0]] + GDAL_PERF_FLAGS + cmd[1:]
 
-    if _supports_progress(cmd[0]):
+    if supports_progress(cmd[0]):
         full_cmd = cmd + ["-progress"]
         result = _sp.run(full_cmd, stderr=_sp.PIPE, text=True)
     else:
@@ -405,6 +483,8 @@ def process_mosaic_workflow(
 def process_dmc4_workflow(
     input_dir, timestamp, upload_enabled, environment, hostname,
     debug: bool = False,
+    cog_compress: str = COG_CONFIG['compress'],
+    cog_quality: int = COG_CONFIG['quality'],
 ):
     """
     Workflow für DMC4 4-Kanal Bildstreifen.
@@ -495,9 +575,8 @@ def process_dmc4_workflow(
                 files = sorted(str(f) for f in src_dir.glob("*.tif"))
                 logger.info(f"  → VRT Mosaic {label} ({len(files)} Streifen) ...")
                 r = _sp.run(
-                    ["gdalbuildvrt",
-                     "--config", "GDAL_CACHEMAX", "512",
-                     "-srcnodata", "0 0 0", str(vrt)] + files,
+                    ["gdalbuildvrt"] + GDAL_PERF_FLAGS +
+                    ["-srcnodata", "0 0 0", str(vrt)] + files,
                     stderr=_sp.PIPE, text=True
                 )
                 if r.returncode != 0:
@@ -510,6 +589,9 @@ def process_dmc4_workflow(
             logger.info("✓ VRT-Mosaike erstellt")
 
             # Step 3: convert VRTs to COG (nodata preserved)
+            _cog_co = ["-co", f"COMPRESS={cog_compress}"]
+            if cog_compress.upper() == "JPEG":
+                _cog_co += ["-co", f"QUALITY={cog_quality}"]
             for label, vrt_name, cog in [
                 ("RGB", "mosaic_rgb.vrt", cog_rgb),
                 ("NRG", "mosaic_nrg.vrt", cog_nrg),
@@ -517,7 +599,7 @@ def process_dmc4_workflow(
                 if not _run_gdal(
                     f"COG {label}: {cog.name}",
                     ["gdal_translate", "-of", "COG",
-                     "-co", "COMPRESS=JPEG", "-co", "QUALITY=75",
+                     *_cog_co,
                      "-co", "BIGTIFF=YES",
                      "-a_nodata", "0",
                      str(tmp / vrt_name), str(cog)],
@@ -727,26 +809,6 @@ def process_photos_workflow(
         return False
 
 
-def _normalize_cli_timestamp(raw: str) -> str:
-    """
-    Normalize compact timestamp to standard YYYY-MM-DDthhmmss[cc] format.
-
-    Args:
-        raw (str): Raw CLI input, e.g. '20210729t125959' or '20210729'
-
-    Returns:
-        str: Normalized timestamp, e.g. '2021-07-29t125959'
-    """
-    # Already normalized if it contains dashes
-    if '-' in raw:
-        return raw
-    # Match compact: YYYYMMDD[tHHMMSS[CC]]
-    m = re.match(r'^(\d{4})(\d{2})(\d{2})(t\d{6}(\d{2})?)?$', raw)
-    if m:
-        date_part = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
-        time_part = m.group(4) or ''
-        return date_part + time_part
-    return raw  # return as-is; validate_timestamp will reject it later
 
 
 # ============================================================
@@ -776,6 +838,7 @@ def main():
     python rapidmapping_processor.py --proxy direct --product ebn --input /data --timestamp 2025-09-03
     python rapidmapping_processor.py --proxy system --product ebn --input /data --timestamp 2025-09-03
     python rapidmapping_processor.py --proxy BVCOL  --product ebn --input /data --timestamp 2025-09-03
+    python rapidmapping_processor.py --secrets-dir C:\\oed\\temp\\rm\\secrets --product ebn --input /data --timestamp 2025-09-03
         """
     )
     # Basic options
@@ -805,9 +868,24 @@ def main():
                               '"direct" (kein Proxy, direkte Verbindung), '
                               '"system" (nur System-Proxy/Bundesnetz), '
                               'oder Proxy-Name aus proxy_config.json (z.B. "BVCOL")'))
+    parser.add_argument('--cog-compress', dest='cog_compress', default=COG_CONFIG['compress'],
+                        metavar='VERFAHREN',
+                        help=f"COG-Kompressionsverfahren, nur für qdop-dmc4 (default: {COG_CONFIG['compress']})")
+    parser.add_argument('--cog-quality', dest='cog_quality', type=int, default=COG_CONFIG['quality'],
+                        metavar='1-100',
+                        help=f"JPEG-Qualität für COG, nur bei --cog-compress JPEG (default: {COG_CONFIG['quality']})")
+    parser.add_argument('--secrets-dir', dest='secrets_dir', default=None,
+                        metavar='VERZEICHNIS',
+                        help=('Pfad zum secrets-Ordner (stac_credentials.json / proxy_config.json), '
+                              'falls das Skript nicht im gleichen Verzeichnis wie secrets/ gestartet wird. '
+                              'Default: secrets/ im aktuellen Arbeitsverzeichnis'))
 
     args = parser.parse_args()
     _is_full_cli = bool(args.product and args.input_dir and args.timestamp)
+
+    if not (1 <= args.cog_quality <= 100):
+        logger.error(f"✗ --cog-quality muss zwischen 1 und 100 liegen (erhalten: {args.cog_quality})")
+        sys.exit(1)
 
     # C) Resolve debug flag: CLI > DEBUG_MODE_DEFAULT
     if args.debug is None:
@@ -825,6 +903,12 @@ def main():
             environment = "INT"
 
         if args.upload:
+            if args.secrets_dir:
+                if not use_secrets_dir(args.secrets_dir):
+                    return 1
+            elif not prompt_secrets_dir_if_missing(interactive=not _is_full_cli):
+                return 1
+
             logger.info("=" * 70)
             logger.info(f"CREDENTIALS ({environment})")
             logger.info("=" * 70)
@@ -884,7 +968,7 @@ def main():
             product_type = prompt_product_type()
 
         if args.timestamp:
-            ts = _normalize_cli_timestamp(args.timestamp.lower().strip())
+            ts = normalize_cli_timestamp(args.timestamp.lower().strip())
             if product_type in (ProductType.EBN, ProductType.EBO):
                 # EBN/EBO: accept date only (YYYY-MM-DD)
                 try:
@@ -943,8 +1027,12 @@ def main():
         print("=" * 70 + "\n")
 
         # ── Log-Datei einrichten ──────────────────────────────────────────────
-        _log_ts       = datetime.now().strftime('%Y%m%d_%H%M%S')
-        _log_filename = f"Log_{product_type.value}_{_log_ts}.txt"
+        # Namenskonvention: <stac-datum>_<produkttyp>_<importDatum>.log
+        # z.B. logs/2025-09-03_ebn_20260908-143512.log
+        _logs_dir     = Path("logs")
+        _logs_dir.mkdir(exist_ok=True)
+        _log_ts       = datetime.now().strftime('%Y%m%d-%H%M%S')
+        _log_filename = _logs_dir / f"{timestamp_or_date}_{product_type.value}_{_log_ts}.log"
         _log_handler  = logging.FileHandler(_log_filename, encoding='utf-8')
         _log_handler.setLevel(logging.INFO)
         _log_handler.setFormatter(
@@ -966,7 +1054,9 @@ def main():
                 success = process_dmc4_workflow(
                     input_dir, timestamp_or_date,
                     args.upload, environment, hostname,
-                    debug=args.debug
+                    debug=args.debug,
+                    cog_compress=args.cog_compress,
+                    cog_quality=args.cog_quality
                 )
             else:
                 success = process_photos_workflow(

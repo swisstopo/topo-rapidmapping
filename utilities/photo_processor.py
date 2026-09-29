@@ -28,6 +28,7 @@ from typing import Optional, Dict, List, Tuple
 from datetime import datetime
 from configuration import THUMBNAIL_CONFIG, ProductType, generate_item_name, generate_asset_name, get_product_config
 from utilities.file_handler import get_jpg_files
+from utilities.gdal_helpers import GDAL_PERF_FLAGS
 # publish_to_stac wird lazy importiert (innerhalb der Funktion) um zirkuläre
 # Imports zu vermeiden: util_publish_stac_fsdi → utilities → photo_processor
 
@@ -352,8 +353,7 @@ def _rotate_to_north_up(jpg_path: Path, angle_deg: float, quality: int = 85) -> 
         result = subprocess.run(
             [
                 'gdalwarp',
-                '--config', 'NUM_THREADS', 'ALL_CPUS',
-                '--config', 'GDAL_CACHEMAX', '512',
+            ] + GDAL_PERF_FLAGS + [
                 '-multi',
                 '-wm', '512',
                 '-of', 'JPEG',
@@ -954,8 +954,7 @@ def convert_tif_to_jpg_with_exif(
             warp_result = subprocess.run(
                 [
                     'gdalwarp',
-                    '--config', 'NUM_THREADS', 'ALL_CPUS',
-                    '--config', 'GDAL_CACHEMAX', '512',
+                ] + GDAL_PERF_FLAGS + [
                     '-multi',
                     '-wm', '512',
                     '-of', 'JPEG',
@@ -1008,8 +1007,7 @@ def convert_tif_to_jpg_with_exif(
         translate_result = subprocess.run(
             [
                 'gdal_translate',
-                '--config', 'NUM_THREADS', 'ALL_CPUS',
-                '--config', 'GDAL_CACHEMAX', '512',
+            ] + GDAL_PERF_FLAGS + [
                 '-of', 'JPEG',
                 '-co', f'QUALITY={quality}',
                 '-co', 'EXIF_THUMBNAIL=NO',
@@ -1228,7 +1226,7 @@ def generate_csv_from_stac(
         return False
 
 
-def parse_exif_timestamp(exif_timestamp: Optional[str], photo_name: str) -> str:
+def parse_exif_timestamp(exif_timestamp: Optional[str], photo_name: str) -> Optional[str]:
     """
     Parsed EXIF-Timestamp zu Item-Timestamp-String.
 
@@ -1240,7 +1238,13 @@ def parse_exif_timestamp(exif_timestamp: Optional[str], photo_name: str) -> str:
     Timestamps angehängt, sodass generate_item_name() einen eindeutigen
     Item-Namen erzeugt.
 
-    Fallback auf Dateinamen oder aktuelles Datum wenn EXIF fehlt.
+    Fallback auf Timestamp im Dateinamen wenn EXIF fehlt. Kann aus keiner der
+    beiden Quellen ein Timestamp bestimmt werden, wird KEIN Datum (auch nicht
+    das aktuelle) untergeschoben — der Aufrufer muss das Bild überspringen
+    und darf es nicht in STAC importieren.
+
+    Returns:
+        Optional[str]: Timestamp-String, oder None wenn kein Timestamp ermittelbar ist.
     """
     # Alle Produkte (EBN/EBO/QDOP) erhalten immer ein 2-stelliges ms-Suffix.
     # Kein Burst-Offset bekannt → "00". Burst-Frame → "01".."99".
@@ -1280,8 +1284,11 @@ def parse_exif_timestamp(exif_timestamp: Optional[str], photo_name: str) -> str:
     except Exception as e:
         logger.debug(f" Konnte Timestamp nicht aus Dateinamen extrahieren: {e}")
 
-    logger.warning(f" ! Kein Timestamp gefunden - verwende aktuelles Datum")
-    return datetime.now().strftime("%Y-%m-%dt%H%M%S").lower() + ms_suffix
+    logger.error(
+        f" ✗ Kein Timestamp ermittelbar (weder EXIF noch Dateiname) — "
+        f"Bild wird NICHT in STAC importiert: {photo_name}"
+    )
+    return None
 
 
 def dms_to_decimal(degrees: float, minutes: float, seconds: float, direction: str) -> float:
@@ -1438,8 +1445,7 @@ def resize_image_gdal(
             translate_result = subprocess.run(
                 [
                     'gdal_translate',
-                    '--config', 'NUM_THREADS', 'ALL_CPUS',
-                    '--config', 'GDAL_CACHEMAX', '512',
+                ] + GDAL_PERF_FLAGS + [
                     '-of', 'JPEG',
                     '-outsize', str(new_width), str(new_height),
                     str(input_file),
@@ -1751,6 +1757,12 @@ def process_individual_photos(
                     if debug:
                         if lat: logger.info(f"     ✓ GPS: {lat:.6f}, {lon:.6f}")
                         else:   logger.warning("    ! Keine GPS-Daten")
+                    if lat is None or lon is None:
+                        logger.error(f"{log_prefix}: ✗ Keine GPS-Daten ermittelbar — Bild wird NICHT in STAC importiert")
+                        return {'source_path': source_path, 'original_filename': source_path.name,
+                                'error': 'no gps', 'skipped_no_gps': True,
+                                'photo_upload_success': False, 'thumbnail_upload_success': False,
+                                'lat': lat, 'lon': lon}
 
                 else:
                     if debug: logger.info("  1.  Extrahiere EXIF-Daten (gdalinfo)...")
@@ -1759,7 +1771,18 @@ def process_individual_photos(
                     if debug:
                         if lat: logger.info(f"     ✓ GPS: {lat:.6f}, {lon:.6f}")
                         else:   logger.warning("    ! Keine GPS-Daten")
-                    timestamp  = parse_exif_timestamp(exif_timestamp, jpg_file.name)
+                    if lat is None or lon is None:
+                        logger.error(f"{log_prefix}: ✗ Keine GPS-Daten ermittelbar — Bild wird NICHT in STAC importiert")
+                        return {'source_path': source_path, 'original_filename': source_path.name,
+                                'error': 'no gps', 'skipped_no_gps': True,
+                                'photo_upload_success': False, 'thumbnail_upload_success': False,
+                                'lat': lat, 'lon': lon}
+                    timestamp = parse_exif_timestamp(exif_timestamp, jpg_file.name)
+                    if timestamp is None:
+                        return {'source_path': source_path, 'original_filename': source_path.name,
+                                'error': 'no timestamp', 'skipped_no_timestamp': True,
+                                'photo_upload_success': False, 'thumbnail_upload_success': False,
+                                'lat': lat, 'lon': lon}
                     item_name  = generate_item_name(timestamp, product_type)
                     asset_name = f"{item_name}-{get_product_config(product_type)['suffix']}"
 
@@ -1938,7 +1961,8 @@ def process_individual_photos(
 
         photos = []
         successful_uploads = 0
-        missing_gps = 0
+        skipped_no_timestamp_names = []
+        skipped_no_gps_names = []
 
         if debug:
             # Sequentiell — jede Datei einzeln mit vollem Logging
@@ -1946,7 +1970,10 @@ def process_individual_photos(
                 result = _process_one(work, idx, total)
                 photos.append(result)
                 if result.get('photo_upload_success'): successful_uploads += 1
-                if result.get('lat') is None:          missing_gps += 1
+                if result.get('skipped_no_timestamp'):
+                    skipped_no_timestamp_names.append(result.get('original_filename', '?'))
+                if result.get('skipped_no_gps'):
+                    skipped_no_gps_names.append(result.get('original_filename', '?'))
 
         else:
             # Parallel — mehrere Dateien gleichzeitig konvertieren + hochladen
@@ -1976,7 +2003,10 @@ def process_individual_photos(
                     result = future.result()
                     photos.append(result)
                     if result.get('photo_upload_success'): successful_uploads += 1
-                    if result.get('lat') is None:          missing_gps += 1
+                    if result.get('skipped_no_timestamp'):
+                        skipped_no_timestamp_names.append(result.get('original_filename', '?'))
+                    if result.get('skipped_no_gps'):
+                        skipped_no_gps_names.append(result.get('original_filename', '?'))
                     done += 1
                     if done % max(1, total // 10) == 0 or done == total:
                         logger.info(f" Fortschritt: {done}/{total} "
@@ -1997,7 +2027,16 @@ def process_individual_photos(
         logger.info(" VERARBEITUNGSZUSAMMENFASSUNG")
         logger.info("=" * 70)
         logger.info(f"Gesamt verarbeitet:      {len(photos)}/{total}")
-        logger.info(f"Ohne GPS-Daten:          {missing_gps}")
+
+        if skipped_no_timestamp_names:
+            logger.warning(f"Übersprungen (kein Timestamp ermittelbar): {len(skipped_no_timestamp_names)}")
+            for _name in skipped_no_timestamp_names:
+                logger.warning(f"  - {_name}")
+
+        if skipped_no_gps_names:
+            logger.warning(f"Übersprungen (keine GPS-Daten ermittelbar): {len(skipped_no_gps_names)}")
+            for _name in skipped_no_gps_names:
+                logger.warning(f"  - {_name}")
 
         if upload_enabled:
             logger.info(f"Erfolgreich hochgeladen: {successful_uploads}/{total}")
@@ -2012,7 +2051,10 @@ def process_individual_photos(
         return {
             'photos': photos,
             'temp_dir': temp_dir,
-            'missing_gps_count': missing_gps,
+            'skipped_no_timestamp_count': len(skipped_no_timestamp_names),
+            'skipped_no_timestamp_names': skipped_no_timestamp_names,
+            'skipped_no_gps_count': len(skipped_no_gps_names),
+            'skipped_no_gps_names': skipped_no_gps_names,
             'successful_uploads': successful_uploads if upload_enabled else 0
         }
 

@@ -1,5 +1,7 @@
 # Swisstopo Rapid Mapping Processor 2.0 RC
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/swisstopo/topo-rapidmapping)
+
 Automatisiertes System für die Publikation von Rapid Mapping Daten auf der FSDI STAC Plattform.
 
 ## Übersicht
@@ -13,8 +15,9 @@ in einem einzigen, benutzerfreundlichen Workflow mit automatischer Proxy-Erkennu
 
 ### Hauptfeatures
 
-- **Single COG-File Workflow (QDOP)**: Prüft ob Input bereits COG-konform ist (8-bit RGB, 3 Bänder)
+- **Single COG-File Workflow (QDOP)**: Prüft ob Input bereits COG-konform ist (8-bit RGB, 3 Bänder); ist die Datei kein COG, wird sie automatisch konvertiert
 - **DMC4-Workflow (QDOP)**: Verarbeitet 4-Kanal DMC4-Bildstreifen automatisch zu RGB + NRG COG
+- **Grafische Oberfläche (GUI)**: Formularbasierter STAC-Import als Alternative zur CLI
 - **Automatische Proxy-Erkennung**: VPN- und Corporate-Proxy-Support mit SSL-Handling
 - **EXIF-Extraktion für (EBN, EBO)**: GPS und Zeitstempel aus Einzelbildern
 - **KML-Overview (EBN, EBO)**: Automatische Generierung via STAC-Abfrage nach Upload
@@ -22,19 +25,52 @@ in einem einzigen, benutzerfreundlichen Workflow mit automatischer Proxy-Erkennu
 - **Batch-Upload**: Einzelbilder werden sequenziell hochgeladen
 - **Error Handling**: Robuste Fehlerbehandlung mit detaillierten Logs
 
+## Entwicklungs-Workflow: Integrationsbranch (int)
+
+Änderungen gehen **nicht** direkt nach `main`. Der `int`-Branch dient als gemeinsamer Staging-Bereich:
+
+```
+dein-branch  →  int  →  main
+  (PR, squash merge)   (PR, merge commit)
+```
+
+### Ablauf
+
+1. Branch von `int` erstellen (nicht von `main`) und Änderungen vornehmen.
+2. Pull Request gegen `int` öffnen und mit **Squash Merge** mergen.
+3. Vor dem Weiterführen nach `main` muss die Testsuite gegen `int` grün sein:
+   ```bash
+   python -m unittest test_functions -v
+   ```
+   (aktuell 48 Tests: Konfiguration, Foto-/Mosaik-/GDAL-Verarbeitung, KML/STAC-Abfragen, Secrets-Prompt, Multipart-Upload-Part-Grösse — siehe `test_functions.py`)
+4. Sind die Tests grün und stimmt das Ergebnis, Pull Request von `int` → `main` öffnen und mit regulärem **Merge Commit** mergen.
+
+### Warum Squash Merge für branch → int, aber ein Merge Commit für int → main?
+
+Während der Integration sammelt ein Feature-Branch oft viele kleine Commits ("Tippfehler behoben", "nochmal versuchen" usw.). Squash Merge fasst sie zu einem sauberen Commit auf `int` zusammen, sodass dessen Historie pro Feature lesbar bleibt.
+
+Bis `int` nach `main` gemerged wird, enthält er typischerweise mehrere solcher bereits gesquashter Commits aus unabhängigen PRs. Würde man auch *diesen* Merge squashen, würden all diese Commits zu einem einzigen Commit auf `main` verflacht und die PR-Zuordnung in der permanenten Produktions-Historie ginge verloren. Ein regulärer Merge Commit erhält stattdessen jeden einzelnen (bereits gesquashten) PR-Commit auf `main`, protokolliert aber trotzdem den Integrationspunkt.
+
 ## Projektstruktur
 
 ```
 rapidmapping_processor/
 ├── rapidmapping_processor.py      # Hauptskript (CLI)
+├── 0_GUI_rapidmapping_STACimport.py # GUI-Einstiegspunkt (startet gui.app)
 ├── configuration.py                # Produktdefinitionen & Konfiguration
 ├── requirements.txt                # Python-Dependencies
 ├── setup.bat                       # Windows Setup-Script
 ├── README.md                       # Diese Datei
+├── gui/                             # Grafische Oberfläche
+│   ├── app.py                     # Hauptfenster / Formular
+│   ├── runner.py                  # Führt rapidmapping_processor.py als Subprocess aus
+│   ├── config.py                  # GUI-eigene Einstellungen (persistiert)
+│   └── theme.py                   # Dark/Light-Theme
 ├── utilities/                      # Hilfsfunktionen
 │   ├── credentials.py             # Credentials-Management (INT/PROD)
 │   ├── proxy_handler.py           # Proxy-Erkennung & VPN-Support
 │   ├── file_handler.py            # Datei-Operationen
+│   ├── gdal_helpers.py            # Gemeinsame GDAL-Hilfsfunktionen
 │   ├── mosaic_processor.py        # COG-File Processing
 │   ├── photo_processor.py         # Einzelbild-Verarbeitung
 │   ├── kml_generator.py           # KML-Overview via STAC-Abfrage
@@ -225,6 +261,14 @@ Voraussetzung: Windows, am Active-Directory-Domain angemeldet.
 
 ## Verwendung
 
+### Grafische Oberfläche (GUI)
+
+```bash
+python 0_GUI_rapidmapping_STACimport.py
+```
+
+Formularbasierte Alternative zur CLI: Umgebung, Input-Verzeichnis, Produkttyp, Zeitstempel, Upload, Debug und Netzwerk-Modus werden im Formular gewählt und daraus dieselben CLI-Flags gebaut, die `rapidmapping_processor.py` auch von Hand entgegennimmt. Ausführung erfolgt via `gui/runner.py` als Subprocess, mit Live-Log und Abbrechen-Button. Für `qdop-dmc4` sind zusätzlich `--cog-compress`/`--cog-quality` im Formular wählbar (siehe Parameter-Übersicht unten).
+
 ### Grundlegende Commands
 
 ```bash
@@ -259,8 +303,8 @@ Das Script führt durch folgende Schritte:
 
 #### Input Requirements
 - **Verzeichnis mit genau 1 TIF-Datei**
-- **COG-konform** (Cloud Optimized GeoTIFF)
 - **8-bit RGB** (3 Bänder, Datatype "Byte")
+- **COG-konform** (Cloud Optimized GeoTIFF) empfohlen, aber nicht zwingend — ist die Datei kein COG, konvertiert das Tool sie automatisch (siehe unten)
 
 #### Workflow
 ```
@@ -287,13 +331,20 @@ Asset: thumbnail.jpg
 
 #### Wenn Input NICHT COG-konform ist
 
-Script gibt Fehler aus mit Anleitung zur COG-Konvertierung:
+Die Datei wird automatisch nach COG konvertiert (Kompression/Qualität aus `configuration.py`,
+`COG_CONFIG`), das Original bleibt dabei unverändert. Erst wenn die Konvertierung selbst
+fehlschlägt, bricht der Lauf ab:
 
-```bash
-✗ Datei ist KEIN Cloud Optimized GeoTIFF (COG)!
-  Bitte konvertiere zu COG mit:
-    gemäss https://github.com/geostandards-ch/cog-best-practices#lossy-visual-image-with-transparency
 ```
+INFO:   Prüfe ob COG...
+INFO:   Datei ist kein COG, starte automatische Konvertierung...
+INFO:   Kompression: JPEG, Qualität: 85
+INFO:  ✓ COG erstellt: <dateiname>_cog.tif
+```
+
+Vor der Konvertierung wird geprüft, ob am Zielort genug freier Speicherplatz vorhanden ist
+(Mosaike können im zweistelligen GB-Bereich liegen) — reicht der Speicher nicht, bricht der
+Lauf mit klarer Fehlermeldung ab, statt die Konvertierung zu versuchen.
 
 **Externes Mosaic-Erstellungs-Script verfügbar:**
 - `rm_publish_quickorthophoto.bat` für ADS100 Flightline-Mosaike
@@ -351,8 +402,12 @@ Asset: ram-2024-07-15t23595900-ebn.txt
 
 #### GPS-Koordinaten Handling
 - **DMS → Dezimal-Konvertierung** (6 Dezimalstellen Präzision)
-- **Warnung bei fehlenden GPS-Daten**: Foto wird übersprungen
-- **KML**: Nur Fotos mit GPS-Daten werden eingebunden
+- **Keine GPS-Daten ermittelbar**: Foto wird **nicht** ohne Position importiert, sondern übersprungen — gleiche Behandlung wie bei fehlendem Zeitstempel (siehe unten). Wird klar protokolliert (Terminal + Log-Datei), inklusive Dateiname, sowohl direkt beim Verarbeiten als auch gesammelt in der Verarbeitungszusammenfassung am Ende des Laufs
+- **KML**: Enthält dadurch immer nur Fotos mit GPS-Daten (übersprungene Fotos ohne Position landen nie in STAC)
+
+#### Zeitstempel-Handling
+- Zeitstempel wird aus EXIF (`DateTimeOriginal`) oder, falls nicht vorhanden, aus dem Dateinamen ermittelt
+- **Kein Timestamp ermittelbar (weder EXIF noch Dateiname)**: Foto wird **nicht** mit dem aktuellen Datum importiert, sondern übersprungen. Wird klar protokolliert (Terminal + Log-Datei), inklusive Dateiname, sowohl direkt beim Verarbeiten als auch gesammelt in der Verarbeitungszusammenfassung am Ende des Laufs
 
 ### 3. QDOP-DMC4 (4-Kanal DMC4-Bildstreifen)
 
@@ -493,9 +548,10 @@ STAC_HOSTNAME_PROD = "data.geo.admin.ch"  # PROD
 # COG-Einstellungen
 COG_CONFIG = {
     'compress': 'JPEG',
-    'quality': 75,
+    'quality': 85,
     'blocksize': 256
 }
+COG_COMPRESS_OPTIONS = ['JPEG', 'LZW', 'DEFLATE', 'ZSTD', 'WEBP', 'NONE']  # wählbar in GUI/CLI
 
 # Thumbnail-Einstellungen
 THUMBNAIL_CONFIG = {
@@ -557,25 +613,64 @@ Das Tool erkennt danach automatisch dass Kerberos benötigt wird — keine weite
 - ODER Environment Variables setzen
 - Format prüfen (JSON muss gültig sein)
 
+### 'secrets'-Ordner nicht gefunden (falsches Arbeitsverzeichnis)
+
+Wird kein `secrets/`-Ordner im aktuellen Verzeichnis gefunden und sind auch keine
+`STAC_USERNAME`/`STAC_PASSWORD`-Environment-Variablen gesetzt, verhält sich das Tool je
+nach Modus unterschiedlich:
+
+**Dialog-Modus** (kein vollständiger CLI-Aufruf): fragt interaktiv nach dem korrekten
+Pfad zum `secrets`-Ordner und wechselt automatisch dorthin — kein manuelles Neustarten
+aus dem richtigen Verzeichnis nötig:
+
+```
+-> Pfad zum secrets-Ordner (Enter = abbrechen): C:\oed\temp\rm\secrets
+```
+
+**Vollständiger CLI-Aufruf** (`--product`/`--input`/`--timestamp` alle gesetzt, z.B.
+Scheduled Task ohne Person am Terminal): fragt NICHT interaktiv nach, sondern gibt die
+Meldung aus und bricht sofort mit Exit-Code 1 ab — ein `input()`-Prompt würde in einem
+unbeaufsichtigten Lauf sonst unbemerkt für immer auf Eingabe warten.
+
+Für diesen Fall den Pfad stattdessen direkt mitgeben, entweder per Parameter:
+```bash
+python rapidmapping_processor.py --secrets-dir C:\oed\temp\rm\secrets --product ebn --input /data --timestamp 2025-09-03
+```
+oder per Environment-Variablen (dann wird gar nicht erst geprüft, ob `secrets/` existiert):
+```bash
+set STAC_USERNAME=your_username
+set STAC_PASSWORD=your_password
+```
+
 ### GPS-Daten fehlen
 ```
-⚠ Keine GPS-Daten gefunden
+✗ Keine GPS-Daten ermittelbar — Bild wird NICHT in STAC importiert
 ```
+**Auswirkung:** Das Foto wird übersprungen (nicht importiert), nicht nur mit einer Warnung
+versehen — steht mit Dateiname auch in der Verarbeitungszusammenfassung am Ende des Laufs.
+
 **Lösung:** 
 - EXIF-Tags in JPEGs prüfen
 - `gdalinfo photo.jpg` ausführen
 - GPS-Schreibrechte in Kamera prüfen
 
-### COG-Check fehlgeschlagen
+### COG-Konvertierung fehlgeschlagen
 ```
-✗ Datei ist KEIN Cloud Optimized GeoTIFF (COG)!
+✗ COG-Konvertierung fehlgeschlagen
 ```
+**Ursache:** Ist die Input-Datei kein COG, konvertiert das Tool sie automatisch (siehe
+[Wenn Input NICHT COG-konform ist](#wenn-input-nicht-cog-konform-ist)). Diese Meldung
+erscheint nur, wenn die automatische Konvertierung selbst scheitert (z.B. defekte/korrupte
+Input-Datei) oder zu wenig freier Speicherplatz für die konvertierte Kopie vorhanden ist.
+
 **Lösung:**
+- Input-Datei mit `gdalinfo input.tif` auf Integrität prüfen
+- Freien Speicherplatz am Zielort (`temp/` bzw. `output/`) prüfen
+- Alternativ manuell konvertieren und das Ergebnis als Input verwenden:
 ```bash
-# Konvertiere zu COG
 gdal_translate -of COG \
   -co COMPRESS=JPEG \
-  -co QUALITY=75 \
+  -co QUALITY=85 \
   -co BLOCKSIZE=256 \
   input.tif output_cog.tif
 ```
@@ -603,6 +698,17 @@ Das Script gibt detailliertes Feedback:
 INFO:  ✓ Erfolgreiche Operation
 WARNING: ⚠ Warnung (nicht kritisch)
 ERROR: ✗ Fehler (kritisch)
+```
+
+### Log-Dateien
+
+Jeder Lauf schreibt zusätzlich zur Konsolenausgabe eine Log-Datei nach `logs/`
+(wird bei Bedarf automatisch angelegt). Namenskonvention:
+
+```
+logs/<stac-datum>_<produkttyp>_<importDatum>.log
+
+Beispiel: logs/2025-09-03_ebn_20260908-143512.log
 ```
 
 ### Log-Level anpassen
@@ -805,10 +911,17 @@ python rapidmapping_processor.py --product ebn --input /data --timestamp 2025-09
 # QDOP-DMC4 (4-Kanal Bildstreifen → erzeugt RGB + NRG)
 python rapidmapping_processor.py --product qdop-dmc4 --input /data/dmc4 --timestamp 2024-07-15t143000
 
+# QDOP-DMC4 mit abweichender COG-Kompression
+python rapidmapping_processor.py --product qdop-dmc4 --input /data/dmc4 --timestamp 2024-07-15t143000 --cog-compress LZW
+python rapidmapping_processor.py --product qdop-dmc4 --input /data/dmc4 --timestamp 2024-07-15t143000 --cog-compress JPEG --cog-quality 85
+
 # Netzwerk-Modus explizit setzen
 python rapidmapping_processor.py --proxy direct --product ebn --input /data --timestamp 2025-09-03
 python rapidmapping_processor.py --proxy system --product ebn --input /data --timestamp 2025-09-03
 python rapidmapping_processor.py --proxy BVCOL  --product ebn --input /data --timestamp 2025-09-03
+
+# secrets-Ordner an anderem Ort (z.B. Scheduled Task, secrets nicht im Arbeitsverzeichnis)
+python rapidmapping_processor.py --secrets-dir C:\oed\temp\rm\secrets --product ebn --input /data --timestamp 2025-09-03
 ```
 
 ### Parameter-Übersicht
@@ -822,6 +935,9 @@ python rapidmapping_processor.py --proxy BVCOL  --product ebn --input /data --ti
 | `--upload` | `True` / `False` | Upload zu STAC (False → ./output/) |
 | `--prod` | Flag | Produktionsumgebung (default: INT) |
 | `--debug` | Flag | Sequentiell + volles Logging |
+| `--cog-compress` | `JPEG`, `LZW`, `DEFLATE`, `ZSTD`, `WEBP`, `NONE` | COG-Kompressionsverfahren, nur für `qdop-dmc4` (default: `JPEG`) |
+| `--cog-quality` | `1`-`100` | JPEG-Qualität für COG, nur bei `--cog-compress JPEG` (default: `85`) |
+| `--secrets-dir` | Pfad | Pfad zum `secrets`-Ordner, falls nicht im aktuellen Arbeitsverzeichnis (default: `secrets/`) |
 
 ### Debug-Modus direkt im Code setzen
 
@@ -933,6 +1049,12 @@ python util_stac_delete_ram.py
 
 ## Generate Executable binaries / EXE  ( for now: WINDOWS only)
 
+**Wichtig:** Die EXE muss auf einer **BUREAUT-Maschine** (Bundes-Arbeitsplatz) generiert werden.
+Nur dort ist die Windows-/Netzwerk-Umgebung vorhanden, gegen die PyInstaller die
+Proxy-Bibliotheken bündelt. Wird die EXE auf einer anderen Maschine gebaut, funktioniert
+die automatische Proxy-Erkennung (System-Proxy, Kerberos/SSPI, VPN-Detection) im
+erzeugten Binary nicht.
+
 The WINDOWS version was created with pyinstaller. [quite a thing](https://stackoverflow.com/questions/56472933/pyinstaller-executable-fails).
 Solution steps
 
@@ -988,9 +1110,17 @@ Bei Problemen:
 ## Performance-Tipps
 
 ### Upload-Geschwindigkeit
-- **Multipart-Upload**: Automatisch für große Dateien (>100MB)
+- **Multipart-Upload**: Für jedes Asset verwendet, Part-Grösse passt sich der Dateigrösse an (siehe unten) — kein hartes Limit mehr bei sehr grossen Mosaiken
 - **Batch-Processing**: Einzelbilder werden sequenziell verarbeitet
 - **Thumbnail-Größe**: 640x480px für schnelleren Upload
+
+### Multipart-Upload bei sehr grossen Assets
+
+Die STAC-API begrenzt Multipart-Uploads auf maximal 100 Parts. Mit der fixen Standard-
+Part-Grösse von 250 MB deckelt das ein einzelnes Asset bei ca. 24.4 GB. Ab dieser Grösse
+wird die Part-Grösse automatisch erhöht (Ziel: ~90 Parts, mit Sicherheitsmarge unter dem
+Limit), sodass auch grössere DMC4-/QDOP-Mosaike zuverlässig hochgeladen werden können —
+für alle kleineren Assets ändert sich nichts, die Part-Grösse bleibt bei 250 MB.
 
 ### Proxy/VPN
 - **VPN-Detection**: Automatisch SSL-Handling anpassen
@@ -1009,6 +1139,21 @@ Bei Problemen:
 MIT
 
 ## Version History
+
+### v2.4 (2025-09)
+- **GUI**: Formularbasierte Oberfläche (`0_GUI_rapidmapping_STACimport.py`) als Alternative zur CLI, baut dieselben CLI-Flags und läuft weiterhin über `rapidmapping_processor.py`/`.exe` als Subprocess
+- **QDOP-DMC4 COG-Optionen**: Neue Parameter `--cog-compress` / `--cog-quality` zur Steuerung der COG-Kompression (default: JPEG/85, vorher fix JPEG/75)
+- **Automatische COG-Konvertierung (QDOP RGB/NRG)**: Ist die Input-Datei kein COG, wird sie automatisch konvertiert (`utilities/mosaic_processor.convert_to_cog`, via `rasterio.shutil.copy`, keine neue Abhängigkeit, funktioniert in der EXE) statt den Lauf abzubrechen. Original bleibt unverändert, Kompression/Qualität aus `COG_CONFIG`, RGB und NRG werden gleich behandelt (beide JPEG-komprimiert). Vor der Konvertierung wird der freie Speicherplatz geprüft; die temporäre `*_cog.tif` wird nach erfolgreicher Publikation mit dem restlichen `temp/`-Verzeichnis gelöscht
+- **Fix: EXIF-Timestamp-Fallback (EBN/EBO)**: `parse_exif_timestamp()` gibt `None` zurück statt auf das aktuelle Datum zurückzufallen, wenn weder EXIF noch Dateiname einen Timestamp liefern. Das Foto wird übersprungen (nicht mehr fälschlicherweise mit dem heutigen Datum in STAC importiert) und mit Dateiname klar protokolliert (Terminal + Log), sowohl direkt beim Verarbeiten als auch gesammelt in der Verarbeitungszusammenfassung
+- **Fehlende GPS-Daten (EBN/EBO) wie fehlender Timestamp behandelt**: Fotos ohne ermittelbare GPS-Koordinaten werden jetzt ebenfalls übersprungen statt ohne Position importiert zu werden, gleich protokolliert (Terminal + Log, Dateiname in der Verarbeitungszusammenfassung) wie beim fehlenden Timestamp
+- **Fix: `asset_create_title`**: wirft bei nicht erkennbarem Dateimuster eine klare `ValueError` statt eines `AttributeError`
+- **Log-Dateien**: werden jetzt in `logs/` statt im Hauptverzeichnis abgelegt, neue Namenskonvention `<stac-datum>_<produkttyp>_<importDatum>.log` (vorher `Log_<produkttyp>_<importDatum>.txt` im Hauptverzeichnis)
+- **Fix: KML/CSV-STAC-Abfrage (`kml_generator.query_stac_items_by_date`)**: Paginierung folgte bei einem GET-'next'-Link fälschlicherweise trotzdem mit POST weiter (konnte die Seite verpassen und die Paginierung vorzeitig abbrechen). Zusätzlich wird jedes Ergebnis jetzt clientseitig gegen das angefragte Datum geprüft — sollte der serverseitige `datetime`-Filter nicht greifen, landen dadurch keine Items anderer Tage mehr im KML/CSV, statt effektiv den ganzen Katalog zu verarbeiten. Ein ungewöhnlich hohes Seitenaufkommen für einen einzelnen Tag wird jetzt protokolliert
+- **Fix: KML/CSV-Paginierung verlor Datums-/Collection-Filter ab Seite 2**: Der `next`-Link dieser STAC-API liefert `"merge": true` mit `body: {"cursor": ...}` — der Code ersetzte den kompletten Request-Body dadurch, statt den Cursor hineinzumergen. Ab Seite 2 gingen `collections`/`datetime`/`limit` verloren, wodurch faktisch der gesamte Katalog durchsucht wurde (empirisch gegen INT und PROD verifiziert: ohne Merge liefert Seite 2 Items beliebiger Tage). Das clientseitige Datums-Sicherheitsnetz (siehe oben) hielt das Endergebnis zwar korrekt, aber auf Kosten unnötig vieler Seiten/Treffer
+- **Interaktive Nachfrage bei fehlendem `secrets`-Ordner**: Das Tool fragt jetzt nach dem korrekten Pfad und wechselt automatisch dorthin, statt erst später mit einer unklaren Fehlermeldung abzubrechen — hilfreich, wenn die App mal nicht im selben Verzeichnis wie `secrets/` gestartet wurde. Gilt sowohl im Dialog-Modus als auch bei vollständigem CLI-Aufruf (zunächst nur im Dialog-Modus, dann auf Wunsch erweitert, da auch ein voller CLI-Aufruf meist von Hand gestartet wird); nur bei Credentials aus Environment-Variablen entfällt der Check ganz
+- **Dynamische Multipart-Upload-Part-Grösse**: `util_publish_stac_fsdi.py` berechnet die Part-Grösse jetzt aus der Asset-Grösse (Ziel ~90 Parts), statt die feste 250-MB-Grösse zu verwenden — verhindert, dass sehr grosse Assets (> ca. 24.4 GB) am 100-Parts-Limit der STAC-API scheitern. Für normal grosse Assets bleibt die Part-Grösse unverändert bei 250 MB
+- **Fix: falscher "Installation fehlgeschlagen"-Abbruch in `pyinstaller_onedir.bat`/`pyinstaller_onefile.bat`**: Die Erfolgsprüfung nach `pip install pyinstaller`/`pip install -r requirements.txt` stand verschachtelt in einem bereits geöffneten `if %errorlevel%`-Block — `%errorlevel%` wird darin beim Parsen des äusseren Blocks einmalig ausgewertet, bevor `pip install` überhaupt läuft, und blieb dadurch immer auf dem alten (fehlerhaften) Wert stehen. Das Skript meldete deshalb *immer* einen Fehlschlag, sobald PyInstaller/rasterio initial fehlte — auch wenn `pip install` sichtbar erfolgreich war. Behoben durch eine frische, nicht verschachtelte Prüfung direkt nach der Installation
+- **Fix: UnicodeEncodeError im Multipart-Upload-Fortschrittsbalken**: `main_multipart_upload_via_api.py` reconfiguriert stdout/stderr jetzt auf UTF-8, statt bei fehlender echter Konsole (z.B. GUI-Subprocess) an den Fortschrittsbalken-Zeichen (█ ░ ✓) abzustürzen — der Upload selbst war davon zwar nicht betroffen, aber der Absturz verschleierte den tatsächlichen Erfolg
 
 ### v2.3 (2025-05)
 - **Kerberos-Proxy EXE-Fix**: 407-Fehler in der generierten EXE behoben (win32timezone + SSPI-Tunnel-Patch)

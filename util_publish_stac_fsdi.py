@@ -152,7 +152,7 @@ def item_create_json_payload(id, coordinates, dt_iso8601, title, geocat_id, curr
     else:
         thumbnail_url = f"{domain}{STAC_COLLECTION}/{id}/thumbnail.jpg"
 
-    links = [{"href": thumbnail_url, "rel": "preview"}]
+    links = [{"href": thumbnail_url, "rel": "preview", "type": "image/jpeg"}]
 
     if "-qdop-" in asset_lower:
         links.insert(0, {

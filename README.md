@@ -44,6 +44,7 @@ dein-branch  →  int  →  main
    ```
    (aktuell 48 Tests: Konfiguration, Foto-/Mosaik-/GDAL-Verarbeitung, KML/STAC-Abfragen, Secrets-Prompt, Multipart-Upload-Part-Grösse — siehe `test_functions.py`)
 4. Sind die Tests grün und stimmt das Ergebnis, Pull Request von `int` → `main` öffnen und mit regulärem **Merge Commit** mergen.
+5. Nach dem Merge Commit `int` → `main`: zusätzlich ein neues Release erstellen (Tag + Release Notes auf GitHub), damit die neue Version für Nutzer:innen sichtbar und die `.exe` unter `dist/` nachvollziehbar einer Version zugeordnet ist — siehe [Version History](#version-history) für die aktuelle Versionsnummer.
 
 ### Warum Squash Merge für branch → int, aber ein Merge Commit für int → main?
 

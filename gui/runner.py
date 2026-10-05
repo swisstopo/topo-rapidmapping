@@ -73,29 +73,46 @@ def detect_osgeo_python(saved_path: str = None) -> str:
     return sys.executable
 
 
-def apply_osgeo_env(env: dict, python_path: str) -> Optional[str]:
+def find_osgeo_python_home(python_path: str) -> Optional[Path]:
     """
-    Bildet die Umgebung der OSGeo4W-Shell (o4w_env.bat) nach, falls
-    `python_path` im "bin"-Ordner einer QGIS-/OSGeo4W-Installation liegt.
+    Sucht zu <root>\\bin\\python3.exe einer QGIS-/OSGeo4W-Installation den
+    Ordner <root>\\apps\\Python3xx mit der Standardbibliothek (Lib\\encodings).
 
-    Hintergrund: <root>\\bin\\python3.exe findet seine Standardbibliothek nur
-    über PYTHONHOME=<root>\\apps\\Python3xx. Ohne diese Variable sucht Python
-    im Arbeitsverzeichnis und bricht ab mit "No module named 'encodings'".
-    Ein fremder PYTHONPATH (z.B. von Condor) wird entfernt, damit er keine
-    Module der QGIS-Python überdeckt.
+    Hintergrund: diese python3.exe findet ihre Standardbibliothek nur über
+    PYTHONHOME. Ohne diese Variable sucht Python im Arbeitsverzeichnis und
+    bricht ab mit "No module named 'encodings'".
 
-    Gibt den gesetzten PYTHONHOME zurück, sonst None (env bleibt dann unverändert).
+    Gibt None zurück, wenn python_path nicht in einer solchen Struktur liegt
+    oder keine Standardbibliothek gefunden wird.
     """
     bin_dir = Path(python_path).parent
-    root = bin_dir.parent
-    if bin_dir.name.lower() != "bin" or not (root / "apps").is_dir():
+    apps_dir = bin_dir.parent / "apps"
+    if bin_dir.name.lower() != "bin" or not apps_dir.is_dir():
         return None
 
-    homes = [p for p in (root / "apps").glob("Python3*") if (p / "Lib" / "os.py").is_file()]
+    homes = [
+        p for p in apps_dir.glob("Python3*")
+        if (p / "Lib" / "encodings" / "__init__.py").is_file()
+    ]
     if not homes:
         return None
     # Höchste Version wählen (z.B. Python312 vor Python39)
-    python_home = max(homes, key=lambda p: int("".join(c for c in p.name if c.isdigit()) or 0))
+    return max(homes, key=lambda p: int("".join(c for c in p.name if c.isdigit()) or 0))
+
+
+def apply_osgeo_env(env: dict, python_path: str) -> Optional[str]:
+    """
+    Bildet die Umgebung der OSGeo4W-Shell (o4w_env.bat) nach, falls
+    `python_path` im "bin"-Ordner einer QGIS-/OSGeo4W-Installation liegt:
+    PYTHONHOME, GDAL_DATA, PROJ_DATA. Ein fremder PYTHONPATH (z.B. von
+    Condor) wird entfernt, damit er keine Module der QGIS-Python überdeckt.
+
+    Gibt den gesetzten PYTHONHOME zurück, sonst None (env bleibt dann unverändert).
+    """
+    python_home = find_osgeo_python_home(python_path)
+    if python_home is None:
+        return None
+    root = Path(python_path).parent.parent
 
     env["PYTHONHOME"] = str(python_home)
     env.pop("PYTHONPATH", None)

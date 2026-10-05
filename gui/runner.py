@@ -73,6 +73,44 @@ def detect_osgeo_python(saved_path: str = None) -> str:
     return sys.executable
 
 
+def apply_osgeo_env(env: dict, python_path: str) -> Optional[str]:
+    """
+    Bildet die Umgebung der OSGeo4W-Shell (o4w_env.bat) nach, falls
+    `python_path` im "bin"-Ordner einer QGIS-/OSGeo4W-Installation liegt.
+
+    Hintergrund: <root>\\bin\\python3.exe findet seine Standardbibliothek nur
+    über PYTHONHOME=<root>\\apps\\Python3xx. Ohne diese Variable sucht Python
+    im Arbeitsverzeichnis und bricht ab mit "No module named 'encodings'".
+    Ein fremder PYTHONPATH (z.B. von Condor) wird entfernt, damit er keine
+    Module der QGIS-Python überdeckt.
+
+    Gibt den gesetzten PYTHONHOME zurück, sonst None (env bleibt dann unverändert).
+    """
+    bin_dir = Path(python_path).parent
+    root = bin_dir.parent
+    if bin_dir.name.lower() != "bin" or not (root / "apps").is_dir():
+        return None
+
+    homes = [p for p in (root / "apps").glob("Python3*") if (p / "Lib" / "os.py").is_file()]
+    if not homes:
+        return None
+    # Höchste Version wählen (z.B. Python312 vor Python39)
+    python_home = max(homes, key=lambda p: int("".join(c for c in p.name if c.isdigit()) or 0))
+
+    env["PYTHONHOME"] = str(python_home)
+    env.pop("PYTHONPATH", None)
+
+    # GDAL-/PROJ-Daten wie in o4w_env.bat — nur setzen, wenn vorhanden und nicht schon gesetzt
+    for var, path in (
+        ("GDAL_DATA", root / "apps" / "gdal" / "share" / "gdal"),
+        ("PROJ_DATA", root / "share" / "proj"),
+        ("PROJ_LIB", root / "share" / "proj"),
+    ):
+        if path.is_dir() and not env.get(var):
+            env[var] = str(path)
+    return str(python_home)
+
+
 def resolve_cli_command(python_path: str = None) -> list:
     """
     Wählt die auszuführende CLI: bevorzugt die gebaute .exe (keine
@@ -150,6 +188,10 @@ class ProcessRunner:
         if python_path:
             bin_dir = str(Path(python_path).parent)
             env["PATH"] = bin_dir + os.pathsep + env.get("PATH", "")
+            if not CLI_EXE.exists():
+                python_home = apply_osgeo_env(env, python_path)
+                if python_home:
+                    self.events.put(("line", f"Python-Umgebung (PYTHONHOME): {python_home}"))
         try:
             self._proc = subprocess.Popen(
                 cmd,

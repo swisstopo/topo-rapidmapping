@@ -31,7 +31,9 @@ from utilities.file_handler import validate_directory  # noqa: E402
 from utilities.proxy_handler import get_configured_proxy_names  # noqa: E402
 
 from gui import config as gui_config  # noqa: E402
-from gui.runner import ProcessRunner, detect_osgeo_python  # noqa: E402
+from gui.runner import (  # noqa: E402
+    CLI_EXE, ProcessRunner, detect_osgeo_python, find_osgeo_python_home,
+)
 from gui.theme import DARK, LIGHT, apply_theme, set_titlebar_dark  # noqa: E402
 
 # ttk.Spinbox gibt es erst ab Python 3.7 — auf 3.6 (noch im Einsatz) auf das
@@ -424,11 +426,25 @@ class RapidMappingApp(tk.Tk):
         p = Path(path)
         return p.is_file() and (p.parent / "gdalinfo.exe").is_file()
 
+    def _osgeo_python_incomplete(self) -> bool:
+        """True wenn eine QGIS-/OSGeo4W-python3.exe gewählt ist (gdalinfo.exe
+        im selben Ordner), deren Standardbibliothek <root>\\apps\\Python3xx\\Lib
+        aber fehlt — der Start würde mit "No module named 'encodings'" scheitern.
+        Irrelevant wenn eine gebaute rapidmapping_processor.exe vorhanden ist."""
+        path = self.interp_var.get().strip()
+        if not path or CLI_EXE.exists():
+            return False
+        p = Path(path)
+        if not (p.is_file() and (p.parent / "gdalinfo.exe").is_file()):
+            return False
+        return find_osgeo_python_home(path) is None
+
     def _revalidate(self, *_):
         ok_dir = self._validate_input_dir()
         ok_ts = self._validate_timestamp()
         ok_creds = (not self.upload_var.get()) or self._credentials_available()
-        ok_gdal = self._gdal_available()
+        python_incomplete = self._osgeo_python_incomplete()
+        ok_gdal = self._gdal_available() and not python_incomplete
 
         self.dir_entry.configure(style="TEntry" if ok_dir else "Invalid.TEntry")
         self.ts_entry.configure(style="TEntry" if ok_ts else "Invalid.TEntry")
@@ -453,7 +469,13 @@ class RapidMappingApp(tk.Tk):
         else:
             self._set_hint(self.ts_hint, f"✗ Ungültiges Format — {format_hint}")
 
-        if self._gdal_on_path():
+        if python_incomplete:
+            self._set_hint(
+                self.interp_hint,
+                "✗ Python-Standardbibliothek nicht gefunden (erwartet: <QGIS>\\apps\\Python3xx\\Lib) "
+                "— QGIS/OSGeo4W-Installation unvollständig? Anderen Interpreter wählen."
+            )
+        elif self._gdal_on_path():
             self._set_hint(
                 self.interp_hint,
                 "✓ GDAL-Tools bereits über PATH verfügbar (Feld optional)", ok=True

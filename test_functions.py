@@ -36,6 +36,7 @@ from utilities import file_handler
 from utilities import gdal_helpers
 from utilities import photo_processor
 from utilities import kml_generator
+from utilities import proxy_handler
 import main_multipart_upload_via_api
 import util_publish_stac_fsdi
 import rapidmapping_processor
@@ -695,6 +696,87 @@ class TestPublishToStacPartSize(unittest.TestCase):
             math.ceil(size_mb / part_size), main_multipart_upload_via_api.MAX_PARTS_NUMBER,
             "Anzahl Parts muss unter dem API-Limit bleiben"
         )
+
+
+# ============================================================
+#  proxy_handler._apply_no_proxy
+# ============================================================
+class TestApplyNoProxy(unittest.TestCase):
+    DEFAULTS = proxy_handler.DEFAULT_PROXY_CONFIG['no_proxy']
+
+    def test_ohne_bestehende_werte_werden_defaults_gesetzt(self):
+        with patch.dict(os.environ, {}, clear=True):
+            proxy_handler._apply_no_proxy(self.DEFAULTS)
+            self.assertEqual(os.environ['NO_PROXY'], "localhost,127.0.0.1,.admin.ch,.bgdi.ch")
+            self.assertEqual(os.environ['no_proxy'], os.environ['NO_PROXY'])
+
+    def test_bestehende_benutzerwerte_bleiben_ohne_duplikate(self):
+        with patch.dict(os.environ, {'NO_PROXY': 'intern.local, .admin.ch'}, clear=True):
+            proxy_handler._apply_no_proxy(self.DEFAULTS)
+            self.assertEqual(
+                os.environ['NO_PROXY'],
+                "intern.local,.admin.ch,localhost,127.0.0.1,.bgdi.ch"
+            )
+
+    def test_leere_liste_aendert_nichts(self):
+        with patch.dict(os.environ, {}, clear=True):
+            proxy_handler._apply_no_proxy([])
+            self.assertNotIn('NO_PROXY', os.environ)
+            self.assertNotIn('no_proxy', os.environ)
+
+    def test_kommagetrennter_string_aus_config_wird_akzeptiert(self):
+        with patch.dict(os.environ, {}, clear=True):
+            proxy_handler._apply_no_proxy(".admin.ch, .bgdi.ch")
+            self.assertEqual(os.environ['NO_PROXY'], ".admin.ch,.bgdi.ch")
+
+
+# ============================================================
+#  proxy_handler._install_kerberos_tunnel_patch
+# ============================================================
+class TestKerberosTunnelPatch(unittest.TestCase):
+    """Der Kerberos-Token muss im CONNECT-Request beim Proxy ankommen, auch
+    wenn urllib3 eine eigene _tunnel-Methode mitbringt (Python < 3.11.9).
+    Lokaler Fake-Proxy auf 127.0.0.1, kein Internet nötig."""
+
+    def test_connect_enthaelt_negotiate_token(self):
+        import socket
+        import threading
+        import types
+        import requests
+
+        received = []
+        server = socket.socket()
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        port = server.getsockname()[1]
+
+        def fake_proxy():
+            conn, _ = server.accept()
+            received.append(conn.recv(65536).decode("latin-1"))
+            conn.sendall(b"HTTP/1.1 407 Proxy authentication required\r\n\r\n")
+            conn.close()
+
+        thread = threading.Thread(target=fake_proxy, daemon=True)
+        thread.start()
+
+        fake_spnego = types.ModuleType("spnego")
+        fake_spnego.client = lambda **kw: types.SimpleNamespace(step=lambda: b"testtoken")
+        try:
+            with patch.dict(sys.modules, {"spnego": fake_spnego}):
+                proxy_handler._install_kerberos_tunnel_patch()
+                session = requests.Session()
+                # System-Proxy der Maschine ignorieren (z.B. Bundesnetz): sonst
+                # überschreibt requests session.proxies mit dem Windows-Proxy.
+                session.trust_env = False
+                session.proxies = {"https": f"http://127.0.0.1:{port}"}
+                with self.assertRaises(requests.exceptions.ProxyError):
+                    session.get("https://sys-data.int.bgdi.ch/", timeout=5)
+            thread.join(timeout=5)
+        finally:
+            server.close()
+
+        self.assertTrue(received, "Fake-Proxy hat keinen CONNECT erhalten")
+        self.assertIn("Proxy-Authorization: Negotiate dGVzdHRva2Vu", received[0])
 
 
 if __name__ == "__main__":

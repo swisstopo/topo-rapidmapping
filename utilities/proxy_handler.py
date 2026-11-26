@@ -21,10 +21,23 @@ Kerberos/SSPI (Corporate-Umgebungen):
 VPN-Erkennung:
   Erkennt automatisch ob ein VPN mit SSL-Inspection aktiv ist
   und deaktiviert in diesem Fall die SSL-Verifikation.
+
+Büronetz (Bundesverwaltung):
+  - Proxy-Ausnahmen (NO_PROXY): Der Test 'Direkte Verbindung' muss wirklich
+    direkt sein. Sonst leitet Windows ihn still über den System-Proxy, der
+    data.geo.admin.ch ohne Anmeldung durchlässt. Das Tool hielt das für eine
+    direkte Verbindung, und Uploads zu *.bgdi.ch scheiterten mit 407.
+    Anpassbar mit "no_proxy" in secrets/proxy_config.json.
+  - Kerberos: Der Proxy verlangt für sys-data.int.bgdi.ch eine Windows-
+    Anmeldung → 'pyspnego' nötig (siehe _install_kerberos_tunnel_patch).
+  - Windows-Zertifikatsspeicher: Mit dem Paket 'truststore' vertraut Python
+    den Root-Zertifikaten der IT (sonst 'CERTIFICATE_VERIFY_FAILED').
 """
 
 import json
 import logging
+import os
+import sys
 import urllib.request
 import requests
 import urllib3
@@ -65,7 +78,9 @@ DEFAULT_PROXY_CONFIG = {
     ],
     'test_url': 'https://data.geo.admin.ch/browser/index.html',
     'timeout': 5,
-    'disable_ssl_warnings': True
+    'disable_ssl_warnings': True,
+    # Hosts, die nie über den System-Proxy laufen sollen (siehe _apply_no_proxy)
+    'no_proxy': ['localhost', '127.0.0.1', '.admin.ch', '.bgdi.ch'],
 }
 
 PROXY_CONFIG_PATH = Path("secrets") / "proxy_config.json"
@@ -221,6 +236,84 @@ def _get_system_proxy_urls() -> List[str]:
     return result
 
 
+def _apply_no_proxy(domains) -> None:
+    """
+    Trägt Proxy-Ausnahmen in die Umgebungsvariable NO_PROXY ein.
+
+    Hintergrund (Büronetz): Ohne Ausnahme leitet requests auch den Test
+    'Direkte Verbindung' still über den Windows-System-Proxy. Weil dieser
+    data.geo.admin.ch ohne Anmeldung durchlässt, hielt das Tool das für eine
+    direkte Verbindung. Spätere Uploads zu sys-data.int.bgdi.ch scheiterten
+    dann mit '407 Proxy authentication required' (dort verlangt der Proxy
+    Kerberos). Mit der Ausnahme ist der Test ehrlich: Geht direkt nicht,
+    wählt das Tool den System-Proxy mit Kerberos-Anmeldung.
+
+    Wirkung: Nur Anfragen OHNE fest eingestellten Proxy (z.B. Modus 'auto' mit
+    direkter Verbindung) gehen für diese Hosts am System-Proxy vorbei.
+    Sessions mit fest gesetztem Proxy ('system', benannter Proxy) sind nicht
+    betroffen. Auf Maschinen ohne Proxy hat NO_PROXY keine Wirkung.
+
+    Bereits gesetzte Einträge des Benutzers bleiben erhalten.
+    """
+    if isinstance(domains, str):  # Toleranz: "a,b" statt ["a", "b"] in der Config
+        domains = domains.split(',')
+    if not domains:
+        return
+
+    # requests liest zuerst 'no_proxy', dann 'NO_PROXY' → beide zusammenführen
+    current = os.environ.get('no_proxy', '') + ',' + os.environ.get('NO_PROXY', '')
+    entries: List[str] = []
+    for entry in current.split(',') + list(domains):
+        entry = entry.strip()
+        if entry and entry not in entries:
+            entries.append(entry)
+
+    value = ','.join(entries)
+    os.environ['no_proxy'] = value
+    os.environ['NO_PROXY'] = value
+    logger.info(f"  ℹ Proxy-Ausnahmen (NO_PROXY): {value}")
+
+
+def _use_windows_certificate_store() -> None:
+    """
+    Lässt Python HTTPS-Zertifikate gegen den Windows-Zertifikatsspeicher prüfen.
+
+    Hintergrund: requests prüft standardmässig nur gegen die eingebaute Liste
+    'certifi'. Root-Zertifikate, welche die IT im Windows-Zertifikatsspeicher
+    verteilt (z.B. für SSL-Inspection im Büronetz), kennt certifi nicht
+    → Fehler 'CERTIFICATE_VERIFY_FAILED: self-signed certificate in certificate chain'.
+
+    Mit dem Paket 'truststore' prüft Python wie Edge/Chrome direkt gegen den
+    Windows-Speicher. Neue IT-Zertifikate wirken damit automatisch, ohne
+    PEM-Export und ohne REQUESTS_CA_BUNDLE.
+
+    Nur unter Windows aktiv; Linux/macOS bleiben unverändert (certifi).
+    Verbindungen mit bewusst deaktivierter SSL-Prüfung (VPN) bleiben deaktiviert.
+    """
+    if sys.platform != 'win32':
+        return
+    try:
+        import truststore
+        truststore.inject_into_ssl()
+    except Exception as e:
+        logger.warning(
+            f" ! Windows-Zertifikatsspeicher nicht aktiv ({type(e).__name__}: {e}).\n"
+            "    Python prüft SSL nur gegen die eigene Zertifikatsliste (certifi).\n"
+            "    Folge im Büronetz: evtl. Fehler 'CERTIFICATE_VERIFY_FAILED'.\n"
+            "    Lösung (OSGeo4W-Shell):  pip install truststore"
+        )
+        return
+    logger.info("  ✓ SSL-Prüfung über Windows-Zertifikatsspeicher (truststore)")
+    # Diagnose-Hinweis: QGIS/OSGeo4W setzen oft CURL_CA_BUNDLE. Ohne truststore
+    # erzwingt requests damit eine Prüfung gegen diese Datei (sogar bei
+    # verify=False). Mit truststore stört das nicht: Es prüft zuerst gegen den
+    # Windows-Speicher, die Datei gilt nur zusätzlich. Deshalb NICHT löschen
+    # (GDAL-Unterprozesse brauchen sie evtl.).
+    for var in ('REQUESTS_CA_BUNDLE', 'CURL_CA_BUNDLE'):
+        if os.environ.get(var):
+            logger.info(f"  ℹ {var} gesetzt (z.B. von QGIS): nur zusätzlich, Windows-Speicher hat Vorrang")
+
+
 def _make_kerberos_session(
     proxies_dict: Optional[Dict],
     verify_ssl: bool,
@@ -306,16 +399,20 @@ def _install_kerberos_tunnel_patch():
       direkt in den CONNECT-Request injiziert. So antwortet der Proxy nie mit
       407, der Socket bleibt gültig und urllib3 kann SSL normal abwickeln.
 
+    Wichtig: urllib3 2.x bringt bei Python < 3.11.9 und 3.12.0–3.12.2 eine
+    eigene _tunnel-Methode mit, welche die von http.client überdeckt. Ohne
+    Patch auch dort geht der CONNECT ohne Kerberos-Token raus → 407.
+    Deshalb werden beide Stellen gepatcht.
+
     Thread-safe: Token-Objekte werden pro Aufruf lokal erstellt.
     Idempotent: wird nur einmal installiert (bewacht durch _kerberos_patched).
     """
     import http.client
     import base64 as _b64
+    import urllib3.connection
 
     if getattr(http.client.HTTPConnection, '_kerberos_patched', False):
         return  # Already installed
-
-    _orig_tunnel = http.client.HTTPConnection._tunnel
 
     def _negotiate_token(proxy_host: str) -> str:
         """
@@ -356,30 +453,39 @@ def _install_kerberos_tunnel_patch():
         logger.debug(' SSPI: all token backends failed — falling back to unauthenticated CONNECT')
         return ''  # no token — caller falls back to unauthenticated
 
-    def _sspi_tunnel(self):
-        token = _negotiate_token(self.host)
+    def _make_sspi_tunnel(_orig_tunnel):
+        """Wrappt eine bestehende _tunnel-Methode mit Kerberos-Token-Injektion."""
+        def _sspi_tunnel(self):
+            token = _negotiate_token(self.host)
 
-        if not token:
-            # No Kerberos token available; try unauthenticated (may hit 407)
-            return _orig_tunnel(self)
+            if not token:
+                # No Kerberos token available; try unauthenticated (may hit 407)
+                return _orig_tunnel(self)
 
-        # Pre-inject the Negotiate token into the CONNECT request headers.
-        # This avoids any 407/reconnect cycle and keeps self.sock intact for
-        # the SSL wrap that urllib3 performs immediately after _tunnel() returns.
-        saved_auth = self._tunnel_headers.pop('Proxy-Authorization', None)
-        self._tunnel_headers['Proxy-Authorization'] = f'Negotiate {token}'
-        try:
-            return _orig_tunnel(self)
-        finally:
-            self._tunnel_headers.pop('Proxy-Authorization', None)
-            if saved_auth is not None:
-                self._tunnel_headers['Proxy-Authorization'] = saved_auth
+            # Pre-inject the Negotiate token into the CONNECT request headers.
+            # This avoids any 407/reconnect cycle and keeps self.sock intact for
+            # the SSL wrap that urllib3 performs immediately after _tunnel() returns.
+            saved_auth = self._tunnel_headers.pop('Proxy-Authorization', None)
+            self._tunnel_headers['Proxy-Authorization'] = f'Negotiate {token}'
+            try:
+                return _orig_tunnel(self)
+            finally:
+                self._tunnel_headers.pop('Proxy-Authorization', None)
+                if saved_auth is not None:
+                    self._tunnel_headers['Proxy-Authorization'] = saved_auth
+        return _sspi_tunnel
 
-    http.client.HTTPConnection._tunnel = _sspi_tunnel
+    http.client.HTTPConnection._tunnel = _make_sspi_tunnel(http.client.HTTPConnection._tunnel)
+    patched = 'http.client'
+    # urllib3-eigene _tunnel-Methode (ältere Python-Versionen) ebenfalls patchen
+    if '_tunnel' in vars(urllib3.connection.HTTPConnection):
+        urllib3.connection.HTTPConnection._tunnel = _make_sspi_tunnel(
+            urllib3.connection.HTTPConnection._tunnel
+        )
+        patched += ' + urllib3'
     http.client.HTTPConnection._kerberos_patched = True
     logger.info(
-        '  ℹ SSPI-Tunnel-Patch aktiv: CONNECT 407 → Kerberos Negotiate '
-        '(urllib3-Kompatibilität für ältere GDAL/QGIS-Umgebungen)'
+        f'  ℹ SSPI-Tunnel-Patch aktiv ({patched}): CONNECT 407 → Kerberos Negotiate'
     )
 
 
@@ -473,6 +579,11 @@ def detect_proxy_requirement(
 
     if config.get('disable_ssl_warnings', True):
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+    # Büronetz: vor dem ersten Verbindungstest Proxy-Ausnahmen setzen und
+    # dem Windows-Zertifikatsspeicher vertrauen (wirkt für alle Sessions).
+    _apply_no_proxy(config.get('no_proxy', DEFAULT_PROXY_CONFIG['no_proxy']))
+    _use_windows_certificate_store()
 
     # ── Helper: standardisiertes Ergebnis-Dict ────────────────────────────────
     def _ok(name: Optional[str], proxies_dict, verify: bool,

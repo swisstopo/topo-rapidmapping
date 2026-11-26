@@ -4,16 +4,18 @@ rasterio
 pyproj
 urllib3
 
-# Kerberos proxy authentication (optional — nur nötig bei Corporate-Proxies
-# die Windows AD / Kerberos verlangen, z.B. 407 Negotiate).
-#
-# Empfohlen (modern, aktiv gepflegt, kein pywin32 nötig):
-#   pip install pyspnego
-#
+# Windows: SSL-Zertifikate aus dem Windows-Zertifikatsspeicher verwenden
+# (nötig im Büronetz mit IT-Root-Zertifikat / SSL-Inspection, sonst
+# CERTIFICATE_VERIFY_FAILED). Fehlt das Paket, läuft das Tool wie bisher.
+truststore; sys_platform == "win32"
+
+# Windows: Kerberos-Anmeldung am Proxy (Bundesnetz: der Proxy verlangt für
+# sys-data.int.bgdi.ch eine Windows-Anmeldung, sonst '407 Proxy authentication
+# required'). Modern, aktiv gepflegt, kein pywin32 nötig.
+pyspnego; sys_platform == "win32"
+
 # Legacy-Fallback (funktioniert noch, aber nicht mehr aktiv gepflegt):
 #   pip install requests-negotiate-sspi
-#
-# pyspnego
 # requests-negotiate-sspi
 
 # STAC Client für Abfragen; funktioniert nicht, da QGIS sqlite3 bindings nciht ok sind

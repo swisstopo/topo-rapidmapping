@@ -4,6 +4,11 @@ rasterio
 pyproj
 urllib3
 
+# Windows: SSL-Zertifikate aus dem Windows-Zertifikatsspeicher verwenden
+# (nötig im Büronetz mit IT-Root-Zertifikat / SSL-Inspection, sonst
+# CERTIFICATE_VERIFY_FAILED). Fehlt das Paket, läuft das Tool wie bisher.
+truststore; sys_platform == "win32"
+
 # Kerberos proxy authentication (optional — nur nötig bei Corporate-Proxies
 # die Windows AD / Kerberos verlangen, z.B. 407 Negotiate).
 #

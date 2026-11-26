@@ -199,6 +199,7 @@ pyinstaller --noconfirm --onedir --console ^
     --hidden-import=utilities.photo_processor ^
     --hidden-import=utilities.kml_generator ^
     --hidden-import=utilities.stac_publisher ^
+    --hidden-import=truststore ^
     --hidden-import=rasterio.serde ^
     --hidden-import=rasterio._shim ^
     --hidden-import=rasterio.sample ^

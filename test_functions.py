@@ -36,6 +36,7 @@ from utilities import file_handler
 from utilities import gdal_helpers
 from utilities import photo_processor
 from utilities import kml_generator
+from utilities import proxy_handler
 import main_multipart_upload_via_api
 import util_publish_stac_fsdi
 import rapidmapping_processor
@@ -695,6 +696,38 @@ class TestPublishToStacPartSize(unittest.TestCase):
             math.ceil(size_mb / part_size), main_multipart_upload_via_api.MAX_PARTS_NUMBER,
             "Anzahl Parts muss unter dem API-Limit bleiben"
         )
+
+
+# ============================================================
+#  proxy_handler._apply_no_proxy
+# ============================================================
+class TestApplyNoProxy(unittest.TestCase):
+    DEFAULTS = proxy_handler.DEFAULT_PROXY_CONFIG['no_proxy']
+
+    def test_ohne_bestehende_werte_werden_defaults_gesetzt(self):
+        with patch.dict(os.environ, {}, clear=True):
+            proxy_handler._apply_no_proxy(self.DEFAULTS)
+            self.assertEqual(os.environ['NO_PROXY'], "localhost,127.0.0.1,.admin.ch,.bgdi.ch")
+            self.assertEqual(os.environ['no_proxy'], os.environ['NO_PROXY'])
+
+    def test_bestehende_benutzerwerte_bleiben_ohne_duplikate(self):
+        with patch.dict(os.environ, {'NO_PROXY': 'intern.local, .admin.ch'}, clear=True):
+            proxy_handler._apply_no_proxy(self.DEFAULTS)
+            self.assertEqual(
+                os.environ['NO_PROXY'],
+                "intern.local,.admin.ch,localhost,127.0.0.1,.bgdi.ch"
+            )
+
+    def test_leere_liste_aendert_nichts(self):
+        with patch.dict(os.environ, {}, clear=True):
+            proxy_handler._apply_no_proxy([])
+            self.assertNotIn('NO_PROXY', os.environ)
+            self.assertNotIn('no_proxy', os.environ)
+
+    def test_kommagetrennter_string_aus_config_wird_akzeptiert(self):
+        with patch.dict(os.environ, {}, clear=True):
+            proxy_handler._apply_no_proxy(".admin.ch, .bgdi.ch")
+            self.assertEqual(os.environ['NO_PROXY'], ".admin.ch,.bgdi.ch")
 
 
 if __name__ == "__main__":

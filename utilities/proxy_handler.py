@@ -21,10 +21,19 @@ Kerberos/SSPI (Corporate-Umgebungen):
 VPN-Erkennung:
   Erkennt automatisch ob ein VPN mit SSL-Inspection aktiv ist
   und deaktiviert in diesem Fall die SSL-Verifikation.
+
+Büronetz (Bundesverwaltung):
+  - Proxy-Ausnahmen (NO_PROXY): *.admin.ch und *.bgdi.ch gehen direkt statt
+    über den System-Proxy (sonst Fehler '407 Proxy authentication required').
+    Anpassbar mit "no_proxy" in secrets/proxy_config.json.
+  - Windows-Zertifikatsspeicher: Mit dem Paket 'truststore' vertraut Python
+    den Root-Zertifikaten der IT (sonst 'CERTIFICATE_VERIFY_FAILED').
 """
 
 import json
 import logging
+import os
+import sys
 import urllib.request
 import requests
 import urllib3
@@ -65,7 +74,9 @@ DEFAULT_PROXY_CONFIG = {
     ],
     'test_url': 'https://data.geo.admin.ch/browser/index.html',
     'timeout': 5,
-    'disable_ssl_warnings': True
+    'disable_ssl_warnings': True,
+    # Hosts, die nie über den System-Proxy laufen sollen (siehe _apply_no_proxy)
+    'no_proxy': ['localhost', '127.0.0.1', '.admin.ch', '.bgdi.ch'],
 }
 
 PROXY_CONFIG_PATH = Path("secrets") / "proxy_config.json"
@@ -219,6 +230,72 @@ def _get_system_proxy_urls() -> List[str]:
             result.append(url)
 
     return result
+
+
+def _apply_no_proxy(domains) -> None:
+    """
+    Trägt Proxy-Ausnahmen in die Umgebungsvariable NO_PROXY ein.
+
+    Hintergrund (Büronetz): Bundes-Hosts (*.admin.ch, *.bgdi.ch) sind direkt
+    erreichbar. Läuft eine Anfrage trotzdem über den Windows-System-Proxy,
+    verlangt dieser eine Anmeldung → Fehler '407 Proxy authentication required'.
+
+    Wirkung: Nur Anfragen OHNE fest eingestellten Proxy (z.B. Modus 'auto' mit
+    direkter Verbindung) gehen für diese Hosts am System-Proxy vorbei.
+    Sessions mit fest gesetztem Proxy ('system', benannter Proxy) sind nicht
+    betroffen. Auf Maschinen ohne Proxy hat NO_PROXY keine Wirkung.
+
+    Bereits gesetzte Einträge des Benutzers bleiben erhalten.
+    """
+    if isinstance(domains, str):  # Toleranz: "a,b" statt ["a", "b"] in der Config
+        domains = domains.split(',')
+    if not domains:
+        return
+
+    # requests liest zuerst 'no_proxy', dann 'NO_PROXY' → beide zusammenführen
+    current = os.environ.get('no_proxy', '') + ',' + os.environ.get('NO_PROXY', '')
+    entries: List[str] = []
+    for entry in current.split(',') + list(domains):
+        entry = entry.strip()
+        if entry and entry not in entries:
+            entries.append(entry)
+
+    value = ','.join(entries)
+    os.environ['no_proxy'] = value
+    os.environ['NO_PROXY'] = value
+    logger.info(f"  ℹ Proxy-Ausnahmen (NO_PROXY): {value}")
+
+
+def _use_windows_certificate_store() -> None:
+    """
+    Lässt Python HTTPS-Zertifikate gegen den Windows-Zertifikatsspeicher prüfen.
+
+    Hintergrund: requests prüft standardmässig nur gegen die eingebaute Liste
+    'certifi'. Root-Zertifikate, welche die IT im Windows-Zertifikatsspeicher
+    verteilt (z.B. für SSL-Inspection im Büronetz), kennt certifi nicht
+    → Fehler 'CERTIFICATE_VERIFY_FAILED: self-signed certificate in certificate chain'.
+
+    Mit dem Paket 'truststore' prüft Python wie Edge/Chrome direkt gegen den
+    Windows-Speicher. Neue IT-Zertifikate wirken damit automatisch, ohne
+    PEM-Export und ohne REQUESTS_CA_BUNDLE.
+
+    Nur unter Windows aktiv; Linux/macOS bleiben unverändert (certifi).
+    Verbindungen mit bewusst deaktivierter SSL-Prüfung (VPN) bleiben deaktiviert.
+    """
+    if sys.platform != 'win32':
+        return
+    try:
+        import truststore
+        truststore.inject_into_ssl()
+    except Exception as e:
+        logger.warning(
+            f" ! Windows-Zertifikatsspeicher nicht aktiv ({type(e).__name__}: {e}).\n"
+            "    Python prüft SSL nur gegen die eigene Zertifikatsliste (certifi).\n"
+            "    Folge im Büronetz: evtl. Fehler 'CERTIFICATE_VERIFY_FAILED'.\n"
+            "    Lösung (OSGeo4W-Shell):  pip install truststore"
+        )
+        return
+    logger.info("  ✓ SSL-Prüfung über Windows-Zertifikatsspeicher (truststore)")
 
 
 def _make_kerberos_session(
@@ -473,6 +550,11 @@ def detect_proxy_requirement(
 
     if config.get('disable_ssl_warnings', True):
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+    # Büronetz: vor dem ersten Verbindungstest Proxy-Ausnahmen setzen und
+    # dem Windows-Zertifikatsspeicher vertrauen (wirkt für alle Sessions).
+    _apply_no_proxy(config.get('no_proxy', DEFAULT_PROXY_CONFIG['no_proxy']))
+    _use_windows_certificate_store()
 
     # ── Helper: standardisiertes Ergebnis-Dict ────────────────────────────────
     def _ok(name: Optional[str], proxies_dict, verify: bool,

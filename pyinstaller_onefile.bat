@@ -195,6 +195,7 @@ pyinstaller --noconfirm --console ^
     --hidden-import=sspi ^
     --hidden-import=sspicon ^
     --hidden-import=win32timezone ^
+    --hidden-import=truststore ^
     --hidden-import=rasterio.serde ^
     --hidden-import=rasterio._shim ^
     --hidden-import=rasterio.sample ^

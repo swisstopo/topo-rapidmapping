@@ -43,5 +43,7 @@
   "timeout": 5,
   "_timeout_comment": "Verbindungs-Timeout in Sekunden (5 ist ein guter Wert)",
   "disable_ssl_warnings": true,
-  "_ssl_comment": "Unterdrückt SSL-Warnungen bei VPN-Verbindungen — auf false wenn du die Warnungen sehen willst"
+  "_ssl_comment": "Unterdrückt SSL-Warnungen bei VPN-Verbindungen — auf false wenn du die Warnungen sehen willst",
+  "no_proxy": ["localhost", "127.0.0.1", ".admin.ch", ".bgdi.ch"],
+  "_no_proxy_comment": "Hosts, die direkt statt über den System-Proxy laufen (Büronetz: verhindert '407 Proxy authentication required'). Fehlt der Eintrag, gilt diese Liste. [] schaltet es ab."
 }

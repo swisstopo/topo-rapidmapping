@@ -204,7 +204,7 @@ Testet in dieser Reihenfolge:
 3. Proxies aus `secrets/proxy_config.json` — als letzter Fallback. SSL-Verifikation wird automatisch ermittelt.
 
 **Option 2 — Kein Proxy**
-Verbindet direkt ohne Proxy. SSL-Verifikation ist immer aktiv (kein Proxy bedeutet keine SSL-Inspection). Schlägt fehl wenn das Netz einen Proxy voraussetzt.
+Verbindet direkt ohne Proxy. SSL-Verifikation ist immer aktiv; unter Windows gegen den Windows-Zertifikatsspeicher (siehe [Büronetz](#büronetz-proxy-ausnahmen-und-firmen-zertifikate)). Schlägt fehl wenn das Netz einen Proxy voraussetzt.
 
 **Option 3 — Bundesnetz**
 Verwendet nur den System-Proxy (Windows-Einstellungen / Umgebungsvariablen), ohne vorher eine direkte Verbindung zu versuchen. SSL-Verifikation wird automatisch ermittelt (VPN-Detection). Sinnvoll wenn bekannt ist, dass man im Bundesnetz mit Proxy arbeitet.
@@ -259,6 +259,28 @@ pip install requests-negotiate-sspi
 ```
 
 Voraussetzung: Windows, am Active-Directory-Domain angemeldet.
+
+#### Büronetz: Proxy-Ausnahmen und Firmen-Zertifikate
+
+Das Tool erledigt beim Start zwei Dinge automatisch. Manuelles Setzen von `NO_PROXY` oder `REQUESTS_CA_BUNDLE` ist nicht mehr nötig.
+
+- **Proxy-Ausnahmen:** `*.admin.ch` und `*.bgdi.ch` laufen direkt statt über den System-Proxy. Ohne diese Ausnahme verlangt der Proxy eine Anmeldung, und der Upload bricht mit `407 Proxy authentication required` ab. Bereits gesetzte `NO_PROXY`-Einträge bleiben erhalten. Die Liste lässt sich in `secrets/proxy_config.json` mit `"no_proxy": [...]` anpassen; `"no_proxy": []` schaltet die Ausnahmen ab. Explizit gewählte Proxies (`--proxy system`, `--proxy <Name>`) sind davon nicht betroffen.
+- **Windows-Zertifikatsspeicher (nur Windows):** Python prüft HTTPS-Zertifikate standardmässig nur gegen eine eigene Liste (`certifi`). Root-Zertifikate der IT kennt diese Liste nicht, daher der Fehler `CERTIFICATE_VERIFY_FAILED: self-signed certificate in certificate chain`. Mit dem Paket `truststore` prüft Python wie Edge/Chrome gegen den Windows-Zertifikatsspeicher. Neue IT-Zertifikate wirken damit automatisch.
+
+Einmalig in der OSGeo4W-Shell installieren (ist auch in `requirements.txt` enthalten):
+
+```bat
+pip install truststore
+```
+
+Im Log erscheinen beim Start:
+
+```
+  ℹ Proxy-Ausnahmen (NO_PROXY): localhost,127.0.0.1,.admin.ch,.bgdi.ch
+  ✓ SSL-Prüfung über Windows-Zertifikatsspeicher (truststore)
+```
+
+Fehlt `truststore`, erscheint eine Warnung, und das Tool läuft wie bisher mit `certifi` weiter. Mit `pip uninstall truststore` lässt sich das alte Verhalten jederzeit wiederherstellen. Unter Linux/macOS ändert sich nichts.
 
 ## Verwendung
 

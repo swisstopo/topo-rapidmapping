@@ -23,9 +23,13 @@ VPN-Erkennung:
   und deaktiviert in diesem Fall die SSL-Verifikation.
 
 Büronetz (Bundesverwaltung):
-  - Proxy-Ausnahmen (NO_PROXY): *.admin.ch und *.bgdi.ch gehen direkt statt
-    über den System-Proxy (sonst Fehler '407 Proxy authentication required').
+  - Proxy-Ausnahmen (NO_PROXY): Der Test 'Direkte Verbindung' muss wirklich
+    direkt sein. Sonst leitet Windows ihn still über den System-Proxy, der
+    data.geo.admin.ch ohne Anmeldung durchlässt. Das Tool hielt das für eine
+    direkte Verbindung, und Uploads zu *.bgdi.ch scheiterten mit 407.
     Anpassbar mit "no_proxy" in secrets/proxy_config.json.
+  - Kerberos: Der Proxy verlangt für sys-data.int.bgdi.ch eine Windows-
+    Anmeldung → 'pyspnego' nötig (siehe _install_kerberos_tunnel_patch).
   - Windows-Zertifikatsspeicher: Mit dem Paket 'truststore' vertraut Python
     den Root-Zertifikaten der IT (sonst 'CERTIFICATE_VERIFY_FAILED').
 """
@@ -236,9 +240,13 @@ def _apply_no_proxy(domains) -> None:
     """
     Trägt Proxy-Ausnahmen in die Umgebungsvariable NO_PROXY ein.
 
-    Hintergrund (Büronetz): Bundes-Hosts (*.admin.ch, *.bgdi.ch) sind direkt
-    erreichbar. Läuft eine Anfrage trotzdem über den Windows-System-Proxy,
-    verlangt dieser eine Anmeldung → Fehler '407 Proxy authentication required'.
+    Hintergrund (Büronetz): Ohne Ausnahme leitet requests auch den Test
+    'Direkte Verbindung' still über den Windows-System-Proxy. Weil dieser
+    data.geo.admin.ch ohne Anmeldung durchlässt, hielt das Tool das für eine
+    direkte Verbindung. Spätere Uploads zu sys-data.int.bgdi.ch scheiterten
+    dann mit '407 Proxy authentication required' (dort verlangt der Proxy
+    Kerberos). Mit der Ausnahme ist der Test ehrlich: Geht direkt nicht,
+    wählt das Tool den System-Proxy mit Kerberos-Anmeldung.
 
     Wirkung: Nur Anfragen OHNE fest eingestellten Proxy (z.B. Modus 'auto' mit
     direkter Verbindung) gehen für diese Hosts am System-Proxy vorbei.
@@ -296,6 +304,14 @@ def _use_windows_certificate_store() -> None:
         )
         return
     logger.info("  ✓ SSL-Prüfung über Windows-Zertifikatsspeicher (truststore)")
+    # Diagnose-Hinweis: QGIS/OSGeo4W setzen oft CURL_CA_BUNDLE. Ohne truststore
+    # erzwingt requests damit eine Prüfung gegen diese Datei (sogar bei
+    # verify=False). Mit truststore stört das nicht: Es prüft zuerst gegen den
+    # Windows-Speicher, die Datei gilt nur zusätzlich. Deshalb NICHT löschen
+    # (GDAL-Unterprozesse brauchen sie evtl.).
+    for var in ('REQUESTS_CA_BUNDLE', 'CURL_CA_BUNDLE'):
+        if os.environ.get(var):
+            logger.info(f"  ℹ {var} gesetzt (z.B. von QGIS): nur zusätzlich, Windows-Speicher hat Vorrang")
 
 
 def _make_kerberos_session(
@@ -383,16 +399,20 @@ def _install_kerberos_tunnel_patch():
       direkt in den CONNECT-Request injiziert. So antwortet der Proxy nie mit
       407, der Socket bleibt gültig und urllib3 kann SSL normal abwickeln.
 
+    Wichtig: urllib3 2.x bringt bei Python < 3.11.9 und 3.12.0–3.12.2 eine
+    eigene _tunnel-Methode mit, welche die von http.client überdeckt. Ohne
+    Patch auch dort geht der CONNECT ohne Kerberos-Token raus → 407.
+    Deshalb werden beide Stellen gepatcht.
+
     Thread-safe: Token-Objekte werden pro Aufruf lokal erstellt.
     Idempotent: wird nur einmal installiert (bewacht durch _kerberos_patched).
     """
     import http.client
     import base64 as _b64
+    import urllib3.connection
 
     if getattr(http.client.HTTPConnection, '_kerberos_patched', False):
         return  # Already installed
-
-    _orig_tunnel = http.client.HTTPConnection._tunnel
 
     def _negotiate_token(proxy_host: str) -> str:
         """
@@ -433,30 +453,39 @@ def _install_kerberos_tunnel_patch():
         logger.debug(' SSPI: all token backends failed — falling back to unauthenticated CONNECT')
         return ''  # no token — caller falls back to unauthenticated
 
-    def _sspi_tunnel(self):
-        token = _negotiate_token(self.host)
+    def _make_sspi_tunnel(_orig_tunnel):
+        """Wrappt eine bestehende _tunnel-Methode mit Kerberos-Token-Injektion."""
+        def _sspi_tunnel(self):
+            token = _negotiate_token(self.host)
 
-        if not token:
-            # No Kerberos token available; try unauthenticated (may hit 407)
-            return _orig_tunnel(self)
+            if not token:
+                # No Kerberos token available; try unauthenticated (may hit 407)
+                return _orig_tunnel(self)
 
-        # Pre-inject the Negotiate token into the CONNECT request headers.
-        # This avoids any 407/reconnect cycle and keeps self.sock intact for
-        # the SSL wrap that urllib3 performs immediately after _tunnel() returns.
-        saved_auth = self._tunnel_headers.pop('Proxy-Authorization', None)
-        self._tunnel_headers['Proxy-Authorization'] = f'Negotiate {token}'
-        try:
-            return _orig_tunnel(self)
-        finally:
-            self._tunnel_headers.pop('Proxy-Authorization', None)
-            if saved_auth is not None:
-                self._tunnel_headers['Proxy-Authorization'] = saved_auth
+            # Pre-inject the Negotiate token into the CONNECT request headers.
+            # This avoids any 407/reconnect cycle and keeps self.sock intact for
+            # the SSL wrap that urllib3 performs immediately after _tunnel() returns.
+            saved_auth = self._tunnel_headers.pop('Proxy-Authorization', None)
+            self._tunnel_headers['Proxy-Authorization'] = f'Negotiate {token}'
+            try:
+                return _orig_tunnel(self)
+            finally:
+                self._tunnel_headers.pop('Proxy-Authorization', None)
+                if saved_auth is not None:
+                    self._tunnel_headers['Proxy-Authorization'] = saved_auth
+        return _sspi_tunnel
 
-    http.client.HTTPConnection._tunnel = _sspi_tunnel
+    http.client.HTTPConnection._tunnel = _make_sspi_tunnel(http.client.HTTPConnection._tunnel)
+    patched = 'http.client'
+    # urllib3-eigene _tunnel-Methode (ältere Python-Versionen) ebenfalls patchen
+    if '_tunnel' in vars(urllib3.connection.HTTPConnection):
+        urllib3.connection.HTTPConnection._tunnel = _make_sspi_tunnel(
+            urllib3.connection.HTTPConnection._tunnel
+        )
+        patched += ' + urllib3'
     http.client.HTTPConnection._kerberos_patched = True
     logger.info(
-        '  ℹ SSPI-Tunnel-Patch aktiv: CONNECT 407 → Kerberos Negotiate '
-        '(urllib3-Kompatibilität für ältere GDAL/QGIS-Umgebungen)'
+        f'  ℹ SSPI-Tunnel-Patch aktiv ({patched}): CONNECT 407 → Kerberos Negotiate'
     )
 
 

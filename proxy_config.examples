@@ -45,5 +45,5 @@
   "disable_ssl_warnings": true,
   "_ssl_comment": "Unterdrückt SSL-Warnungen bei VPN-Verbindungen — auf false wenn du die Warnungen sehen willst",
   "no_proxy": ["localhost", "127.0.0.1", ".admin.ch", ".bgdi.ch"],
-  "_no_proxy_comment": "Hosts, die direkt statt über den System-Proxy laufen (Büronetz: verhindert '407 Proxy authentication required'). Fehlt der Eintrag, gilt diese Liste. [] schaltet es ab."
+  "_no_proxy_comment": "Hosts, die nie still über den System-Proxy laufen. Sorgt dafür, dass der Test 'Direkte Verbindung' wirklich direkt ist (Büronetz: sonst später '407 Proxy authentication required'). Fehlt der Eintrag, gilt diese Liste. [] schaltet es ab."
 }

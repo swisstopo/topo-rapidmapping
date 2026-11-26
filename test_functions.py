@@ -730,5 +730,51 @@ class TestApplyNoProxy(unittest.TestCase):
             self.assertEqual(os.environ['NO_PROXY'], ".admin.ch,.bgdi.ch")
 
 
+# ============================================================
+#  proxy_handler._install_kerberos_tunnel_patch
+# ============================================================
+class TestKerberosTunnelPatch(unittest.TestCase):
+    """Der Kerberos-Token muss im CONNECT-Request beim Proxy ankommen, auch
+    wenn urllib3 eine eigene _tunnel-Methode mitbringt (Python < 3.11.9).
+    Lokaler Fake-Proxy auf 127.0.0.1, kein Internet nötig."""
+
+    def test_connect_enthaelt_negotiate_token(self):
+        import socket
+        import threading
+        import types
+        import requests
+
+        received = []
+        server = socket.socket()
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        port = server.getsockname()[1]
+
+        def fake_proxy():
+            conn, _ = server.accept()
+            received.append(conn.recv(65536).decode("latin-1"))
+            conn.sendall(b"HTTP/1.1 407 Proxy authentication required\r\n\r\n")
+            conn.close()
+
+        thread = threading.Thread(target=fake_proxy, daemon=True)
+        thread.start()
+
+        fake_spnego = types.ModuleType("spnego")
+        fake_spnego.client = lambda **kw: types.SimpleNamespace(step=lambda: b"testtoken")
+        try:
+            with patch.dict(sys.modules, {"spnego": fake_spnego}):
+                proxy_handler._install_kerberos_tunnel_patch()
+                session = requests.Session()
+                session.proxies = {"https": f"http://127.0.0.1:{port}"}
+                with self.assertRaises(requests.exceptions.ProxyError):
+                    session.get("https://sys-data.int.bgdi.ch/", timeout=5)
+            thread.join(timeout=5)
+        finally:
+            server.close()
+
+        self.assertTrue(received, "Fake-Proxy hat keinen CONNECT erhalten")
+        self.assertIn("Proxy-Authorization: Negotiate dGVzdHRva2Vu", received[0])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

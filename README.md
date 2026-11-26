@@ -262,25 +262,30 @@ Voraussetzung: Windows, am Active-Directory-Domain angemeldet.
 
 #### Büronetz: Proxy-Ausnahmen und Firmen-Zertifikate
 
-Das Tool erledigt beim Start zwei Dinge automatisch. Manuelles Setzen von `NO_PROXY` oder `REQUESTS_CA_BUNDLE` ist nicht mehr nötig.
+Im Bundesnetz lässt der Proxy `data.geo.admin.ch` ohne Anmeldung durch. Für `sys-data.int.bgdi.ch` verlangt er dagegen eine Windows-Anmeldung (Kerberos). Das Tool erledigt beim Start drei Dinge automatisch. Manuelles Setzen von `NO_PROXY` oder `REQUESTS_CA_BUNDLE` ist nicht nötig.
 
-- **Proxy-Ausnahmen:** `*.admin.ch` und `*.bgdi.ch` laufen direkt statt über den System-Proxy. Ohne diese Ausnahme verlangt der Proxy eine Anmeldung, und der Upload bricht mit `407 Proxy authentication required` ab. Bereits gesetzte `NO_PROXY`-Einträge bleiben erhalten. Die Liste lässt sich in `secrets/proxy_config.json` mit `"no_proxy": [...]` anpassen; `"no_proxy": []` schaltet die Ausnahmen ab. Explizit gewählte Proxies (`--proxy system`, `--proxy <Name>`) sind davon nicht betroffen.
+- **Ehrlicher Direkt-Test (Proxy-Ausnahmen):** `*.admin.ch` und `*.bgdi.ch` stehen in `NO_PROXY`. So ist der Test „Direkte Verbindung“ wirklich direkt. Ohne diese Ausnahme schickte Windows den Test still über den Proxy. Das Tool hielt das für eine direkte Verbindung, und die Uploads scheiterten danach mit `407 Proxy authentication required`. Bereits gesetzte `NO_PROXY`-Einträge bleiben erhalten. Die Liste lässt sich in `secrets/proxy_config.json` mit `"no_proxy": [...]` anpassen; `"no_proxy": []` schaltet die Ausnahmen ab. Explizit gewählte Proxies (`--proxy system`, `--proxy <Name>`) sind davon nicht betroffen.
+- **Kerberos-Anmeldung am Proxy:** Mit `pyspnego` meldet sich das Tool mit dem angemeldeten Windows-Benutzer am Proxy an. Das funktioniert auch mit Python-Versionen, bei denen urllib3 den Proxy-Tunnel selbst aufbaut (Python < 3.11.9 und 3.12.0–3.12.2).
 - **Windows-Zertifikatsspeicher (nur Windows):** Python prüft HTTPS-Zertifikate standardmässig nur gegen eine eigene Liste (`certifi`). Root-Zertifikate der IT kennt diese Liste nicht, daher der Fehler `CERTIFICATE_VERIFY_FAILED: self-signed certificate in certificate chain`. Mit dem Paket `truststore` prüft Python wie Edge/Chrome gegen den Windows-Zertifikatsspeicher. Neue IT-Zertifikate wirken damit automatisch.
 
-Einmalig in der OSGeo4W-Shell installieren (ist auch in `requirements.txt` enthalten):
+Einmalig in der OSGeo4W-Shell bzw. der venv installieren (beides ist in `requirements.txt` enthalten):
 
 ```bat
-pip install truststore
+pip install pyspnego truststore
 ```
 
-Im Log erscheinen beim Start:
+Im Bundesnetz erscheinen beim Start:
 
 ```
   ℹ Proxy-Ausnahmen (NO_PROXY): localhost,127.0.0.1,.admin.ch,.bgdi.ch
   ✓ SSL-Prüfung über Windows-Zertifikatsspeicher (truststore)
+ [1] Direkte Verbindung → https://data.geo.admin.ch/browser/index.html ...
+  ✗ Direkte Verbindung fehlgeschlagen
+  ✓ System-Proxy OK (Kerberos/spnego): http://...
+  ℹ SSPI-Tunnel-Patch aktiv (http.client + urllib3): CONNECT 407 → Kerberos Negotiate
 ```
 
-Fehlt `truststore`, erscheint eine Warnung, und das Tool läuft wie bisher mit `certifi` weiter. Mit `pip uninstall truststore` lässt sich das alte Verhalten jederzeit wiederherstellen. Unter Linux/macOS ändert sich nichts.
+Steht dort stattdessen `Keine Kerberos-Bibliothek gefunden` und `System-Proxy OK (ohne Auth)`, fehlt `pyspnego`, und die Uploads scheitern mit 407. Fehlt `truststore`, erscheint eine Warnung, und das Tool läuft wie bisher mit `certifi` weiter. Mit `pip uninstall truststore` lässt sich das alte Verhalten jederzeit wiederherstellen. Unter Linux/macOS ändert sich nichts.
 
 ## Verwendung
 

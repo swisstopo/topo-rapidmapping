@@ -42,7 +42,7 @@ dein-branch  →  int  →  main
    ```bash
    python -m unittest test_functions -v
    ```
-   (aktuell 48 Tests: Konfiguration, Foto-/Mosaik-/GDAL-Verarbeitung, KML/STAC-Abfragen, Secrets-Prompt, Multipart-Upload-Part-Grösse — siehe `test_functions.py`)
+   (aktuell 106 Tests: Konfiguration, DMC4-Zeitstempel aus Dateinamen, STAC-Löschfunktion (Ziele, Bestätigungen), Foto-/Mosaik-/GDAL-Verarbeitung, KML/STAC-Abfragen, Secrets-Prompt, Multipart-Upload-Part-Grösse — siehe `test_functions.py`)
 4. Sind die Tests grün und stimmt das Ergebnis, Pull Request von `int` → `main` öffnen und mit regulärem **Merge Commit** mergen.
 5. Nach dem Merge Commit `int` → `main`: zusätzlich ein neues Release erstellen (Tag + Release Notes auf GitHub), damit die neue Version für Nutzer:innen sichtbar und die `.exe` unter `dist/` nachvollziehbar einer Version zugeordnet ist — siehe [Version History](#version-history) für die aktuelle Versionsnummer.
 
@@ -314,6 +314,7 @@ python rapidmapping_processor.py --upload=False
 
 Das Script führt durch folgende Schritte:
 
+0. **Startfrage**: "Daten verarbeiten" (Standard, Enter) oder "Erweitert: STAC-Daten LÖSCHEN" (siehe [Erweiterte Option: STAC-Daten löschen](#erweiterte-option-stac-daten-löschen))
 1. **Credentials laden** (INT oder PROD)
 2. **Input-Verzeichnis** angeben
 3. **Produkttyp** auswählen:
@@ -322,8 +323,35 @@ Das Script führt durch folgende Schritte:
    - Einzelbilder Nadir (EBN)
    - Einzelbilder Oblique (EBO)
    - QDOP-DMC4 (4-Kanal DMC4-Streifen → RGB + NRG)
-4. **Zeitstempel** (bei Mosaiken) oder nur Datum (bei Einzelbildern)
+4. **Zeitstempel** (bei Mosaiken) oder nur Datum (bei Einzelbildern). Bei **QDOP-DMC4** wird der Zeitstempel aus den Streifen-Dateinamen **vorgeschlagen** (Enter = übernehmen, oder eigenen Wert eingeben) und es wird angezeigt, ob für denselben Tag bereits Items auf STAC existieren (siehe [QDOP-DMC4](#3-qdop-dmc4-4-kanal-dmc4-bildstreifen))
 5. **Bestätigung** und Start
+
+### Erweiterte Option: STAC-Daten löschen
+
+Gelöscht wird in der Collection `ch.swisstopo.spezialbefliegungen`, nur in RAM-Items (`ram-...`). Drei Varianten, jeweils **nach Anzeige** der betroffenen Daten und mit **zwei Bestätigungen** (`yes`, danach `I agree`, alles andere bricht ohne Löschen ab). Läuft auch in der EXE.
+
+| Variante | `--delete` | `--target` (Beispiel) | Wirkung |
+|----------|-----------|-----------------------|---------|
+| 1) EIN Asset | `asset` | `ram-2017-08-25t10092400-ebn-photo.jpg` | Nur dieses Asset, das Item bleibt bestehen |
+| 2) EIN Item | `item` | `2017-08-25t10092400` (mit oder ohne `ram-`) | Item inkl. **aller** Assets |
+| 3) ALLE Items eines Datums | `date` | `2024-07-15` | Alle RAM-Items, deren ID dieses Datum enthält (auch KML/CSV-Overview-Item) |
+
+**Dialog:** `python rapidmapping_processor.py` (bzw. `.exe`) starten, bei der Startfrage `2` wählen, danach Umgebung, Netzwerk, Variante und Ziel eingeben.
+
+**CLI:**
+```bash
+python rapidmapping_processor.py --delete asset --target ram-2017-08-25t10092400-ebn-photo.jpg
+python rapidmapping_processor.py --delete item  --target 2017-08-25t10092400
+python rapidmapping_processor.py --delete date  --target 2024-07-15 --prod
+```
+
+- INT ist Standard, PROD nur mit `--prod` (bzw. bewusster Wahl im Dialog). Die Umgebung wird vor den Bestätigungen angezeigt.
+- `--proxy` und `--secrets-dir` funktionieren wie beim Upload.
+- Die Bestätigungen gibt es immer, auch im CLI-Modus (ein unbeaufsichtigter Lauf wird ohne Terminal abgebrochen, ohne etwas zu löschen).
+- Asset-Namen sind die echten STAC-Asset-Keys (mit Punkt, z.B. `...-ebn-photo.jpg`); die Schreibweise `...-photo-jpg` wird zu `.jpg` korrigiert. Thumbnails gehören zum Item: dafür Variante 2 verwenden.
+- Wird mit Variante 1 das letzte Asset gelöscht, bleibt ein leeres Item bestehen (Hinweis im Log). Es lässt sich mit Variante 2 entfernen.
+- Die Ergebnisse stehen in `logs/<ziel>_delete-<variante>_<zeit>.log`.
+- **Gelöschte Daten können nicht wiederhergestellt werden.**
 
 ## Produkttypen & Workflows
 
@@ -443,6 +471,18 @@ Asset: ram-2024-07-15t23595900-ebn.txt
 - **Verzeichnis mit einem oder mehreren 4-Band TIF-Streifen**
 - **Kein CRS zugewiesen** — Daten liegen in EPSG:2056 (LV95), werden automatisch zugewiesen
 - **Bandstruktur**: Band 1 = Rot, Band 2 = Grün, Band 3 = Blau, Band 4 = Nahinfrarot
+- **Dateinamen der Streifen** (für den automatischen Zeitstempel): `MMDD_hhmm_Linie_..._RGBN.tif`, z.B. `0312_1234_052_41216_RGBN.tif` (12. März, 12:34 Uhr, Linie 052)
+
+#### Zeitstempel (automatisch aus den Dateinamen)
+Der Zeitstempel muss nicht mehr von Hand eingetippt werden:
+
+- Verwendet wird der **früheste Streifen** (erster Frame der Serie). Fehlen Sekunden im Dateinamen, sind Sekunden und Hundertstel `00` (z.B. `0312_1234_...` → `2026-03-12t12340000`).
+- Das **Jahr** steht nicht im Dateinamen und kommt aus der **Systemzeit**. Läge das Datum damit in der Zukunft (Flug im Dezember, Verarbeitung im Januar), wird automatisch das Vorjahr verwendet. Soll es anders sein, das Jahr mit `--timestamp YYYY-MM-DD` angeben.
+- **CLI:** `--timestamp` ist bei `qdop-dmc4` **optional** und läuft ohne Rückfrage durch. Das verwendete Ergebnis und seine Herkunft stehen im Log. Möglich sind: weglassen, `MM-DD` oder `YYYY-MM-DD` (Uhrzeit aus den Dateinamen) oder der volle Zeitstempel `YYYY-MM-DDthhmmss[cc]` (wird unverändert verwendet).
+- **Dialog:** der Zeitstempel wird als **Vorschlag** angezeigt (Enter = übernehmen, oder eigenen Wert eingeben). Danach wird (bei aktivem Upload) angezeigt, ob für **denselben Tag bereits Items** auf STAC existieren, damit ein mögliches Duplikat vor der Verarbeitung auffällt.
+- Alternatives Dateinamen-Format `Linie_hhmmss.tif` (z.B. `041_091636.tif`) enthält kein Datum: dann muss das Datum angegeben werden (`--timestamp YYYY-MM-DD`).
+- Passt **kein** Dateiname, wird **nie** das heutige Datum eingesetzt. Stattdessen bricht das Tool mit einer Anleitung ab (bzw. fragt im Dialog nach dem vollständigen Zeitstempel).
+- Die GUI (`0_GUI_rapidmapping_STACimport.py`) verlangt den Zeitstempel weiterhin.
 
 #### Workflow
 ```
@@ -937,7 +977,17 @@ python rapidmapping_processor.py --product ebn --input /data --timestamp 2025-09
 python rapidmapping_processor.py --product ebn --input /data --timestamp 2025-09-03 --upload=False --debug
 
 # QDOP-DMC4 (4-Kanal Bildstreifen → erzeugt RGB + NRG)
+# Zeitstempel aus den Dateinamen (Jahr aus Systemzeit), kein --timestamp nötig
+python rapidmapping_processor.py --product qdop-dmc4 --input /data/dmc4
+# Datum vorgeben (z.B. anderes Jahr), Uhrzeit aus den Dateinamen
+python rapidmapping_processor.py --product qdop-dmc4 --input /data/dmc4 --timestamp 2026-03-12
+# Zeitstempel komplett von Hand
 python rapidmapping_processor.py --product qdop-dmc4 --input /data/dmc4 --timestamp 2024-07-15t143000
+
+# STAC-Daten löschen (immer mit Anzeige + "yes" + "I agree")
+python rapidmapping_processor.py --delete asset --target ram-2017-08-25t10092400-ebn-photo.jpg
+python rapidmapping_processor.py --delete item  --target 2017-08-25t10092400
+python rapidmapping_processor.py --delete date  --target 2024-07-15 --prod
 
 # QDOP-DMC4 mit abweichender COG-Kompression
 python rapidmapping_processor.py --product qdop-dmc4 --input /data/dmc4 --timestamp 2024-07-15t143000 --cog-compress LZW
@@ -958,7 +1008,9 @@ python rapidmapping_processor.py --secrets-dir C:\oed\temp\rm\secrets --product 
 |-----------|-------|--------------|
 | `--product` | `ebn`, `ebo`, `qdop-rgb`, `qdop-nrg`, `qdop-dmc4` | Produkttyp |
 | `--input` | Pfad | Quellverzeichnis mit Eingabedaten |
-| `--timestamp` | `YYYY-MM-DD` oder `YYYY-MM-DDthhmmss[cc]` | Datum/Zeitstempel |
+| `--timestamp` | `YYYY-MM-DD` oder `YYYY-MM-DDthhmmss[cc]` | Datum/Zeitstempel. Bei `qdop-dmc4` optional: weglassen, `MM-DD`, `YYYY-MM-DD` oder voll (fehlende Teile aus den Streifen-Dateinamen bzw. dem Systemjahr) |
+| `--delete` | `asset`, `item`, `date` | Erweitert: STAC-Daten löschen (EIN Asset / EIN Item inkl. Assets / ALLE Items eines Datums). Braucht `--target`, nicht kombinierbar mit `--product`/`--input`/`--timestamp` |
+| `--target` | Asset-Name, Item oder Datum | Ziel für `--delete`, z.B. `ram-2017-08-25t10092400-ebn-photo.jpg`, `2017-08-25t10092400` oder `2024-07-15` |
 | `--proxy` | `auto`, `direct`, `system`, Proxy-Name | Netzwerk-Modus. Wenn weggelassen: `auto` im CLI-Modus, interaktive Auswahl im Dialog-Modus |
 | `--upload` | `True` / `False` | Upload zu STAC (False → ./output/) |
 | `--prod` | Flag | Produktionsumgebung (default: INT) |
@@ -1056,22 +1108,22 @@ Download von [v0.0.1-alpha](https://github.com/swisstopo/topo-rapidmapping/relea
 ### util_stac_delete_ram.py
 
 #### Beschreibung
-Hilfs-Script zum Löschen von Rapid-Mapping-Items aus der STAC-Plattform.
+Löschlogik für Rapid-Mapping-Daten auf der STAC-Plattform. Sie ist als **erweiterte Option in `rapidmapping_processor.py` (und damit in der EXE)** eingebunden, siehe [Erweiterte Option: STAC-Daten löschen](#erweiterte-option-stac-daten-löschen). Das Script lässt sich weiterhin auch eigenständig starten.
 
 #### Features
-- Löschen einzelner Items oder ganzer Datensätze
-- Sicherheitsabfrage vor Löschung
+- Drei Varianten: EIN Asset, EIN Item inkl. Assets, ALLE Items eines Datums
+- Anzeige der betroffenen Daten und zwei Bestätigungen (`yes`, `I agree`) vor jeder Löschung
 - Unterstützung für INT und PROD-Umgebungen
 
-#### Verwendung
+#### Verwendung (eigenständig)
 ```bash
-python util_stac_delete_ram.py
+python utilities/util_stac_delete_ram.py
 ```
 
 **Interaktiver Ablauf:**
 1. Wählen Sie Umgebung (INT/PROD)
-2. Geben Sie Item-Name oder Datum ein
-3. Bestätigen Sie die Löschung
+2. Wählen Sie die Variante (Asset / Item / Datum) und geben Sie das Ziel ein
+3. Prüfen Sie die Anzeige und bestätigen Sie mit `yes` und `I agree`
 
 **Vorsicht:** Gelöschte Items können nicht wiederhergestellt werden!
 
@@ -1167,6 +1219,10 @@ für alle kleineren Assets ändert sich nichts, die Part-Grösse bleibt bei 250 
 MIT
 
 ## Version History
+
+### Unreleased (Branch `feature/dmc4-timestamp-and-delete`)
+- **QDOP-DMC4: Zeitstempel aus den Streifen-Dateinamen (Issue #24)**: `--timestamp` ist bei `qdop-dmc4` optional. Uhrzeit (und Monat/Tag) kommen aus dem frühesten Streifen (`MMDD_hhmm_Linie_..._RGBN.tif`), das Jahr aus der Systemzeit (bei Zukunftsdatum Vorjahr). Im Dialog wird der Zeitstempel als Vorschlag angezeigt und es werden bereits vorhandene Items desselben Tages aufgelistet. Neue Funktion `configuration.suggest_dmc4_timestamp()`. Ohne passenden Dateinamen wird nie das heutige Datum eingesetzt
+- **STAC-Daten löschen in der EXE (Issue #30)**: Neue Optionen `--delete asset|item|date` und `--target`, im Dialog als Startfrage "Erweitert: STAC-Daten LÖSCHEN". Immer mit Anzeige und zwei Bestätigungen (`yes`, `I agree`). Die Logik in `utilities/util_stac_delete_ram.py` ist jetzt aus `rapidmapping_processor.py` importierbar (Imports repariert, URLs aus `configuration.py`), Ausgaben gehen ins Logging und damit in die Log-Datei
 
 ### v2.4 (2025-09)
 - **GUI**: Formularbasierte Oberfläche (`0_GUI_rapidmapping_STACimport.py`) als Alternative zur CLI, baut dieselben CLI-Flags und läuft weiterhin über `rapidmapping_processor.py`/`.exe` als Subprocess

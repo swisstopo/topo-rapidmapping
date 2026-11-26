@@ -94,7 +94,23 @@ Das Programm startet und stellt nacheinander Fragen.
 
 ## Teil 3: Die interaktiven Fragen (Schritt für Schritt)
 
-Das Programm führt durch **5 Fragen**. Mit Enter bestätigen.
+Das Programm beginnt mit einer **Startfrage** (Frage 0) und führt dann durch **5 Fragen**. Mit Enter bestätigen.
+
+---
+
+### Frage 0 — Was möchten Sie tun?
+
+```
+Was möchten Sie tun?
+   1) Daten verarbeiten und publizieren  (Standard)
+   2) Erweitert: STAC-Daten LÖSCHEN
+->
+```
+
+| Eingabe | Bedeutung |
+|---------|-----------|
+| `1` oder Enter | Normale Verarbeitung, weiter mit Frage 1 |
+| `2` | Daten wieder entfernen, siehe [Teil 5](#teil-5-daten-löschen) |
 
 ---
 
@@ -151,7 +167,7 @@ Pfad zum Ordner eingeben, der die Eingabedaten enthält:
 | Produkttyp | Was muss im Ordner liegen |
 |------------|--------------------------|
 | QDOP RGB / NRG | Genau **1 COG-TIF-Datei** (8-bit RGB) |
-| QDOP-DMC4 | Ein oder mehrere **4-Band TIF-Streifen** |
+| QDOP-DMC4 | Ein oder mehrere **4-Band TIF-Streifen** (Dateinamen wie `0312_1234_052_41216_RGBN.tif`, daraus wird der Zeitstempel gelesen) |
 | EBN / EBO | Mehrere **JPEG-Fotos** mit GPS im EXIF |
 
 ---
@@ -188,13 +204,35 @@ Bitte Aufnahmedatum angeben:
 ->
 ```
 
-**Bei QDOP und DMC4** (Datum + Uhrzeit):
+**Bei QDOP RGB / NRG** (Datum + Uhrzeit):
 
 ```
 Bitte Aufnahmezeitpunkt angeben:
    Format: YYYY-MM-DDthhmmss  Beispiel: 2024-07-15t143000
 ->
 ```
+
+**Bei DMC4** schlägt das Programm den Zeitstempel selbst vor. Er wird aus den Dateinamen der Streifen gelesen
+(`MMDD_hhmm_Linie_..._RGBN.tif`, z.B. `0312_1234_052_41216_RGBN.tif` = 12. März, 12:34 Uhr). Das **Jahr** kommt aus der
+Systemzeit des Computers (liegt das Datum damit in der Zukunft, z.B. Flug im Dezember und Verarbeitung im Januar, wird das Vorjahr genommen):
+
+```
+Bitte Aufnahmezeitpunkt bestätigen:
+   Vorschlag (aus Dateiname '0312_1234_052_41216_RGBN.tif' (frühester Streifen), Jahr 2026 aus Systemzeit)
+   -> 2026-03-12t12340000
+   Enter = Vorschlag übernehmen, oder eigenen Wert eingeben (YYYY-MM-DDthhmmss)
+->
+```
+
+| Eingabe | Bedeutung |
+|---------|-----------|
+| Enter | Vorschlag übernehmen |
+| `2025-03-12t123400` | eigenen Wert verwenden (z.B. anderes Jahr) |
+
+> **Prüfen:** Stimmt das Jahr? Danach zeigt das Programm an, ob für denselben Tag schon Items auf STAC existieren
+> (Warnung mit Liste). Dann prüfen, ob es sich um ein Duplikat handelt, bevor die Verarbeitung gestartet wird.
+>
+> Passt kein Dateiname, macht das Programm **keinen** Vorschlag und fragt nach dem vollständigen Zeitstempel.
 
 ---
 
@@ -266,155 +304,57 @@ Am Ende der Log-Datei stehen die fertigen Links für den nächsten Schritt:
 Wenn Daten irrtümlich publiziert wurden oder ein Test-Upload entfernt werden soll.
 
 > **Achtung:** Gelöschte Daten können nicht wiederhergestellt werden.
+> Freigabe: Die Leitung RM ordnet an, der Bereitschaftsdienst führt aus.
 
-Das Lösch-Script läuft **nicht** als EXE — es braucht eine vollständige Python-Umgebung.
-Diese Einrichtung ist einmalig nötig.
+Das Löschen ist eine **erweiterte Option des normalen Programms** und läuft in der EXE.
+Es braucht keine Python-Umgebung mehr.
 
-### 5.1 Einmalige Einrichtung (nur beim ersten Mal)
+### 5.1 Drei Varianten
 
-**OSGeo4W Shell öffnen** und folgende Schritte der Reihe nach ausführen:
+| Nr. | Variante | Eingabe (Beispiel) | Wirkung |
+|-----|----------|--------------------|---------|
+| 1 | **EIN Asset** | `ram-2017-08-25t10092400-ebn-photo.jpg` | Nur dieses Asset, das Item bleibt bestehen |
+| 2 | **EIN Item** (inkl. aller Assets) | `2017-08-25t10092400` | Das ganze Item mit allen Assets |
+| 3 | **ALLE Items eines Datums** | `2024-07-15` | Alle RAM-Items dieses Tages (auch KML-/Listen-Item) |
 
-**Repository herunterladen (git clone):**
-
-```
-cd C:\legacySW
-git clone https://github.com/swisstopo/topo-rapidmapping.git
-cd topo-rapidmapping
-```
-
-> Falls `git` nicht verfügbar: Repository als ZIP von GitHub herunterladen und nach
-> `C:\legacySW\topo-rapidmapping\` entpacken.
-
-**Python Virtual Environment erstellen:**
+### 5.2 Im Dialog
 
 ```
-"C:\Program Files\QGIS 3.x.x\apps\Python312\python.exe" -m venv .venv --system-site-packages
+cd C:\legacySW	opo-rapidmapping
+rapidmapping_processor.exe
 ```
 
-> Versionsnummer (`3.x.x`) anpassen — im Windows-Explorer unter
-> `C:\Program Files\` nachschauen welche QGIS-Version installiert ist.
+1. **Frage 0:** `2` eingeben (Erweitert: STAC-Daten LÖSCHEN)
+2. **Umgebung:** `1` INT (Standard) oder `2` PROD
+3. **Netzwerk:** wie beim normalen Lauf, im Zweifel `1` Autodetect
+4. **Variante** `1`, `2` oder `3` wählen und das Ziel eingeben (Enter = abbrechen)
+5. **Liste prüfen:** Das Programm zeigt, was gelöscht wird (Umgebung, Items, Assets)
+6. **Erste Bestätigung:** `yes` eintippen (genau so)
+7. **Zweite Bestätigung:** `I agree` eintippen (genau so)
 
-**Virtual Environment aktivieren:**
+Alles andere als `yes` bzw. `I agree` bricht ab, es wird nichts gelöscht.
 
-```
-.venv\Scripts\activate
-```
-
-Nach der Aktivierung erscheint `(.venv)` am Anfang der Zeile.
-
-**Abhängigkeiten installieren:**
-
-```
-pip install -r requirements.txt
-```
-
-**Zugangsdaten bereitstellen:**
-
-Ordner `secrets\` und Datei `stac_credentials.json` einrichten — gleich wie in Teil 1.3 beschrieben.
-
----
-
-### 5.2 Lösch-Script starten
-
-Bei jedem Aufruf: OSGeo4W Shell öffnen, ins Verzeichnis wechseln, venv aktivieren:
+### 5.3 Per Kommandozeile
 
 ```
-cd C:\legacySW\topo-rapidmapping
-.venv\Scripts\activate
-python utilities/util_stac_delete_ram.py
+rapidmapping_processor.exe --delete asset --target ram-2017-08-25t10092400-ebn-photo.jpg
+rapidmapping_processor.exe --delete item  --target 2017-08-25t10092400
+rapidmapping_processor.exe --delete date  --target 2024-07-15
+rapidmapping_processor.exe --delete date  --target 2024-07-15 --prod
 ```
 
-### 5.3 Interaktive Schritte
+- Ohne `--prod` wird in **INT** gelöscht, mit `--prod` in **PROD**.
+- Die Liste und die beiden Bestätigungen (`yes`, `I agree`) kommen auch hier.
 
-**Schritt 1 — Umgebung wählen:**
+### 5.4 Ergebnis
 
-```
-Select environment:
-  1) INT (sys-data.int.bgdi.ch)
-  2) PROD (data.geo.admin.ch)
+Das Programm löscht zuerst die Assets, dann das Item. Am Ende steht `SUCCESS` oder, bei Fehlern, eine Liste der nicht
+gelöschten Assets/Items mit `ERROR`. Alles steht in der Log-Datei unter `logs\<ziel>_delete-<variante>_<zeit>.log`.
 
-Enter choice (1 or 2):
-```
+Wird mit Variante 1 das letzte Asset eines Items gelöscht, bleibt ein leeres Item bestehen (Hinweis im Log).
+Zum Entfernen Variante 2 verwenden.
 
-`1` für INT, `2` für PROD eingeben.
-
----
-
-**Schritt 2 — Lösch-Modus wählen:**
-
-```
-Select what to delete:
-  1) All RAM items (spezialbefliegungen_ram-*)
-  2) RAM items from specific date (e.g., 2024-07-15)
-
-Enter choice (1 or 2):
-```
-
-| Wahl | Wann verwenden |
-|------|---------------|
-| `1` | Alle RAM-Items löschen (Vorsicht!) |
-| `2` | Nur Items eines bestimmten Tages löschen (empfohlen) |
-
-Bei Wahl `2` das Datum eingeben:
-
-```
-Enter date (YYYY-MM-DD, e.g., 2024-07-15): 2024-07-15
-```
-
----
-
-**Schritt 3 — Liste prüfen:**
-
-Das Programm zeigt alle Items, die gelöscht werden:
-
-```
-ITEMS TO BE DELETED
-======================================================================
-  1. ram-2024-07-15t12052300-ebn
-  2. ram-2024-07-15t13102100-ebn
-  3. ram-2024-07-15t23595900
-
-Total items to delete: 3
-```
-
-Liste sorgfältig prüfen, bevor weiter.
-
----
-
-**Schritt 4 — Doppelte Bestätigung:**
-
-Erste Bestätigung:
-
-```
-Type "yes" to continue:
-```
-
-`yes` eintippen (genau so, keine Abkürzung).
-
-Zweite Bestätigung:
-
-```
-Type "I agree" to proceed with deletion:
-```
-
-`I agree` eintippen (genau so).
-
----
-
-**Schritt 5 — Löschung läuft:**
-
-Das Programm löscht zuerst alle Assets, dann das Item. Am Ende erscheint eine Zusammenfassung:
-
-```
-DELETION SUMMARY
-======================================================================
-✓ Successfully deleted assets: 6
-✗ Failed asset deletions:      0
-✓ Successfully deleted items:  3
-✗ Failed item deletions:       0
-```
-
-Wenn Fehler auftreten: Log-Ausgabe an die zuständige Person weitergeben.
+Wenn Fehler auftreten: Log-Datei an die zuständige Person weitergeben.
 
 ---
 
@@ -485,6 +425,15 @@ rapidmapping_processor.exe --prod --product ebo --input C:\daten\rm --timestamp 
 
 # Lokale Verarbeitung ohne Upload (Test)
 rapidmapping_processor.exe --upload=False
+
+# DMC4 ohne Zeitstempel (Uhrzeit aus den Dateinamen, Jahr aus Systemzeit)
+rapidmapping_processor.exe --product qdop-dmc4 --input C:\daten\dmc4
+
+# DMC4 mit Datum (z.B. anderes Jahr), Uhrzeit aus den Dateinamen
+rapidmapping_processor.exe --product qdop-dmc4 --input C:\daten\dmc4 --timestamp 2026-03-12
+
+# Daten löschen (immer mit Liste + "yes" + "I agree")
+rapidmapping_processor.exe --delete item --target 2017-08-25t10092400
 ```
 
 ---

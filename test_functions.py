@@ -765,6 +765,9 @@ class TestKerberosTunnelPatch(unittest.TestCase):
             with patch.dict(sys.modules, {"spnego": fake_spnego}):
                 proxy_handler._install_kerberos_tunnel_patch()
                 session = requests.Session()
+                # System-Proxy der Maschine ignorieren (z.B. Bundesnetz): sonst
+                # überschreibt requests session.proxies mit dem Windows-Proxy.
+                session.trust_env = False
                 session.proxies = {"https": f"http://127.0.0.1:{port}"}
                 with self.assertRaises(requests.exceptions.ProxyError):
                     session.get("https://sys-data.int.bgdi.ch/", timeout=5)

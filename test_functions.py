@@ -256,7 +256,7 @@ class TestSupportsProgress(unittest.TestCase):
 # ============================================================
 #  utilities.photo_processor.parse_exif_timestamp
 #  Regressionstest: Bilder ohne ermittelbaren Timestamp dürfen NIE das
-#  aktuelle Datum als Ersatzwert bekommen (siehe HANDBUCH.md Teil 6).
+#  aktuelle Datum als Ersatzwert bekommen (siehe CLAUDE.md, Abschnitt Timestamps).
 # ============================================================
 class TestParseExifTimestamp(unittest.TestCase):
 

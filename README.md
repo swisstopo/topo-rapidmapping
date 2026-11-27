@@ -66,7 +66,6 @@ topo-rapidmapping/
 ├── launch_vscode.bat               # VS Code mit OSGeo4W-/QGIS-Umgebung starten
 ├── test_functions.py               # Unit-Tests (python -m unittest test_functions -v)
 ├── README.md                       # Diese Datei
-├── HANDBUCH.md                     # Anleitung für Anwender:innen der EXE
 ├── CLAUDE.md                       # Regeln für Claude Code in diesem Repository
 ├── gui/                             # Grafische Oberfläche
 │   ├── app.py                     # Hauptfenster / Formular

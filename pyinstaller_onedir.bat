@@ -199,6 +199,14 @@ pyinstaller --noconfirm --onedir --console ^
     --hidden-import=utilities.photo_processor ^
     --hidden-import=utilities.kml_generator ^
     --hidden-import=utilities.stac_publisher ^
+    --hidden-import=utilities.util_stac_delete_ram ^
+    --hidden-import=spnego ^
+    --hidden-import=sspilib ^
+    --collect-submodules=spnego ^
+    --hidden-import=requests_negotiate_sspi ^
+    --hidden-import=sspi ^
+    --hidden-import=sspicon ^
+    --hidden-import=win32timezone ^
     --hidden-import=truststore ^
     --hidden-import=rasterio.serde ^
     --hidden-import=rasterio._shim ^

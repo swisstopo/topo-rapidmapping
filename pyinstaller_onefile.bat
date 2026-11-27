@@ -188,6 +188,7 @@ pyinstaller --noconfirm --console ^
     --hidden-import=utilities.photo_processor ^
     --hidden-import=utilities.kml_generator ^
     --hidden-import=utilities.stac_publisher ^
+    --hidden-import=utilities.util_stac_delete_ram ^
     --hidden-import=spnego ^
     --hidden-import=sspilib ^
     --collect-submodules=spnego ^

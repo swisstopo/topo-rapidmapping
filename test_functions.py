@@ -40,6 +40,8 @@ from utilities import proxy_handler
 import main_multipart_upload_via_api
 import util_publish_stac_fsdi
 import rapidmapping_processor
+from datetime import date
+from utilities import util_stac_delete_ram
 
 
 # ============================================================
@@ -254,7 +256,7 @@ class TestSupportsProgress(unittest.TestCase):
 # ============================================================
 #  utilities.photo_processor.parse_exif_timestamp
 #  Regressionstest: Bilder ohne ermittelbaren Timestamp dürfen NIE das
-#  aktuelle Datum als Ersatzwert bekommen (siehe HANDBUCH.md Teil 6).
+#  aktuelle Datum als Ersatzwert bekommen (siehe CLAUDE.md, Abschnitt Timestamps).
 # ============================================================
 class TestParseExifTimestamp(unittest.TestCase):
 
@@ -777,6 +779,395 @@ class TestKerberosTunnelPatch(unittest.TestCase):
 
         self.assertTrue(received, "Fake-Proxy hat keinen CONNECT erhalten")
         self.assertIn("Proxy-Authorization: Negotiate dGVzdHRva2Vu", received[0])
+
+
+# ============================================================
+#  configuration.suggest_dmc4_timestamp  (Issue #24)
+#  DMC4-Zeitstempel aus den Streifen-Dateinamen: MMDD_hhmm_Linie_..._RGBN.tif
+#  (Jahr aus Systemzeit) bzw. Linie_hhmmss.tif (Datum muss angegeben werden).
+# ============================================================
+class TestSuggestDmc4Timestamp(unittest.TestCase):
+
+    FILES = [
+        "0312_1245_041_41216_RGBN.tif",
+        "0312_1234_052_41216_RGBN.tif",   # frühester Streifen (nicht die tiefste Liniennummer)
+        "0312_1240_001_41216_RGBN.tif",
+    ]
+    TODAY = date(2026, 5, 1)
+
+    def test_fruehester_streifen_und_jahr_aus_systemzeit(self):
+        ts, info = configuration.suggest_dmc4_timestamp(self.FILES, today=self.TODAY)
+        self.assertEqual(ts, "2026-03-12t12340000")
+        self.assertIn("0312_1234_052_41216_RGBN.tif", info)
+
+    def test_ergebnis_ist_gueltiger_zeitstempel(self):
+        ts, _ = configuration.suggest_dmc4_timestamp(self.FILES, today=self.TODAY)
+        self.assertTrue(configuration.validate_timestamp(ts))
+
+    def test_flug_im_dezember_verarbeitung_im_januar_nimmt_vorjahr(self):
+        ts, _ = configuration.suggest_dmc4_timestamp(
+            ["1212_0900_001_41216_RGBN.tif"], today=date(2027, 1, 3))
+        self.assertEqual(ts, "2026-12-12t09000000")
+
+    def test_explizites_jahr_hat_vorrang(self):
+        ts, _ = configuration.suggest_dmc4_timestamp(
+            self.FILES, date="2025-03-12", today=self.TODAY)
+        self.assertEqual(ts, "2025-03-12t12340000")
+
+    def test_datum_mm_dd_filtert_streifen_dieses_tages(self):
+        files = self.FILES + ["0313_0800_001_41216_RGBN.tif"]
+        ts, _ = configuration.suggest_dmc4_timestamp(files, date="03-13", today=self.TODAY)
+        self.assertEqual(ts, "2026-03-13t08000000")
+
+    def test_datum_ohne_passende_streifen_gibt_none_mit_erklaerung(self):
+        ts, info = configuration.suggest_dmc4_timestamp(self.FILES, date="03-20", today=self.TODAY)
+        self.assertIsNone(ts)
+        self.assertIn("03-20", info)
+
+    def test_format_linie_hhmmss_braucht_datum(self):
+        files = ["041_091636.tif", "042_091000.tif"]
+        ts, info = configuration.suggest_dmc4_timestamp(files, today=self.TODAY)
+        self.assertIsNone(ts)
+        self.assertIn("Datum", info)
+
+        ts, _ = configuration.suggest_dmc4_timestamp(files, date="2026-03-12", today=self.TODAY)
+        self.assertEqual(ts, "2026-03-12t09100000")  # früheste Uhrzeit, nicht tiefste Linie
+
+    def test_kein_passender_dateiname_gibt_none_kein_heutiges_datum(self):
+        ts, info = configuration.suggest_dmc4_timestamp(["foo.tif", "bar.tif"], today=self.TODAY)
+        self.assertIsNone(ts)
+        self.assertIn("Zeitstempel", info)
+
+    def test_ungueltiges_datum_im_dateinamen_gibt_none(self):
+        ts, _ = configuration.suggest_dmc4_timestamp(["0231_1200_001_41216_RGBN.tif"], today=self.TODAY)
+        self.assertIsNone(ts)
+
+    def test_unlesbares_datum_argument_gibt_none(self):
+        ts, info = configuration.suggest_dmc4_timestamp(self.FILES, date="12.03.", today=self.TODAY)
+        self.assertIsNone(ts)
+        self.assertIn("MM-DD", info)
+
+
+# ============================================================
+#  rapidmapping_processor.get_dmc4_timestamp / main() mit DMC4 ohne --timestamp
+# ============================================================
+class TestDmc4TimestampInProcessor(unittest.TestCase):
+
+    def setUp(self):
+        self._orig_cwd = os.getcwd()
+        self._tmp_root = tempfile.mkdtemp()
+        os.chdir(self._tmp_root)
+        self.input_dir = Path(self._tmp_root) / "dmc4"
+        self.input_dir.mkdir()
+        for name in ("0312_1234_052_41216_RGBN.tif", "0312_1240_001_41216_RGBN.tif"):
+            (self.input_dir / name).write_bytes(b"")
+
+    def tearDown(self):
+        os.chdir(self._orig_cwd)
+        shutil.rmtree(self._tmp_root, ignore_errors=True)
+
+    def test_cli_ohne_timestamp_nimmt_zeit_aus_dateinamen(self):
+        ts = rapidmapping_processor.get_dmc4_timestamp(self.input_dir, None, interactive=False)
+        self.assertRegex(ts, r"^\d{4}-03-12t12340000$")
+
+    def test_cli_mit_datum_ergaenzt_uhrzeit_aus_dateinamen(self):
+        ts = rapidmapping_processor.get_dmc4_timestamp(self.input_dir, "2025-03-12", interactive=False)
+        self.assertEqual(ts, "2025-03-12t12340000")
+
+    def test_cli_voller_zeitstempel_wird_unveraendert_verwendet(self):
+        ts = rapidmapping_processor.get_dmc4_timestamp(
+            self.input_dir, "2024-07-15t143000", interactive=False)
+        self.assertEqual(ts, "2024-07-15t143000")
+
+    def test_cli_ohne_passende_dateinamen_gibt_none_ohne_nachfrage(self):
+        empty = Path(self._tmp_root) / "other"
+        empty.mkdir()
+        (empty / "irgendwas.tif").write_bytes(b"")
+        with patch("builtins.input", side_effect=AssertionError("CLI darf nicht nachfragen")):
+            ts = rapidmapping_processor.get_dmc4_timestamp(empty, None, interactive=False)
+        self.assertIsNone(ts)
+
+    def test_dialog_enter_uebernimmt_vorschlag(self):
+        with patch("builtins.input", return_value=""):
+            ts = rapidmapping_processor.get_dmc4_timestamp(self.input_dir, None, interactive=True)
+        self.assertRegex(ts, r"^\d{4}-03-12t12340000$")
+
+    def test_dialog_eingabe_ueberschreibt_vorschlag(self):
+        with patch("builtins.input", return_value="2024-07-15t143000"):
+            ts = rapidmapping_processor.get_dmc4_timestamp(self.input_dir, None, interactive=True)
+        self.assertEqual(ts, "2024-07-15t143000")
+
+    def test_main_dmc4_ohne_timestamp_laeuft_ohne_nachfrage_durch(self):
+        fake_argv = ['rapidmapping_processor.py', '--product', 'qdop-dmc4',
+                     '--input', str(self.input_dir), '--upload=False']
+        with patch.object(sys, 'argv', fake_argv), \
+             patch('builtins.input', side_effect=AssertionError("kein Dialog erwartet")), \
+             patch.object(rapidmapping_processor, 'process_dmc4_workflow', return_value=True) as mock_wf:
+            exit_code = rapidmapping_processor.main()
+
+        self.assertEqual(exit_code, 0)
+        used_timestamp = mock_wf.call_args[0][1]
+        self.assertRegex(used_timestamp, r"^\d{4}-03-12t12340000$")
+
+
+# ============================================================
+#  util_stac_delete_ram.normalize_delete_target  (Issue #30)
+# ============================================================
+class TestNormalizeDeleteTarget(unittest.TestCase):
+
+    def test_item_mit_und_ohne_prefix_und_hundertstel(self):
+        n = util_stac_delete_ram.normalize_delete_target
+        self.assertEqual(n('item', '2017-08-25t10092400'), 'ram-2017-08-25t10092400')
+        self.assertEqual(n('item', 'RAM-2017-08-25t10092400'), 'ram-2017-08-25t10092400')
+        self.assertEqual(n('item', '2017-08-25t100924'), 'ram-2017-08-25t10092400')
+
+    def test_item_ungueltig(self):
+        with self.assertRaises(ValueError):
+            util_stac_delete_ram.normalize_delete_target('item', '2017-13-25t10092400')
+
+    def test_asset_normal_und_tolerante_schreibweise(self):
+        n = util_stac_delete_ram.normalize_delete_target
+        self.assertEqual(n('asset', 'ram-2017-08-25t10092400-ebn-photo.jpg'),
+                         'ram-2017-08-25t10092400-ebn-photo.jpg')
+        self.assertEqual(n('asset', '2017-08-25t10092400-ebn-photo-jpg'),
+                         'ram-2017-08-25t10092400-ebn-photo.jpg')
+
+    def test_asset_thumbnail_ohne_item_wird_abgelehnt(self):
+        with self.assertRaises(ValueError):
+            util_stac_delete_ram.normalize_delete_target('asset', 'thumbnail.jpg')
+
+    def test_item_id_aus_asset_name(self):
+        self.assertEqual(
+            util_stac_delete_ram.item_id_from_asset_name('ram-2017-08-25t10092400-ebn-photo.jpg'),
+            'ram-2017-08-25t10092400')
+
+    def test_datum(self):
+        n = util_stac_delete_ram.normalize_delete_target
+        self.assertEqual(n('date', '2024-07-15'), '2024-07-15')
+        for bad in ('2024-7-15', '2024-02-30', '15.07.2024'):
+            with self.assertRaises(ValueError):
+                n('date', bad)
+
+    def test_leeres_ziel_und_unbekannte_variante(self):
+        with self.assertRaises(ValueError):
+            util_stac_delete_ram.normalize_delete_target('item', '  ')
+        with self.assertRaises(ValueError):
+            util_stac_delete_ram.normalize_delete_target('alles', 'x')
+
+
+# ============================================================
+#  util_stac_delete_ram.run_delete  (Issue #30)
+#  Netzwerk komplett gemockt. Wichtig: nur "yes" gefolgt von "I agree" löscht.
+# ============================================================
+class TestRunDelete(unittest.TestCase):
+
+    ITEM_ID = 'ram-2017-08-25t10092400'
+    ASSET = 'ram-2017-08-25t10092400-ebn-photo.jpg'
+
+    def _item(self, item_id=None, assets=None):
+        return {'id': item_id or self.ITEM_ID,
+                'assets': {k: {} for k in (assets or [self.ASSET, 'thumbnail.jpg'])}}
+
+    def _run(self, mode, target, inputs, item=None, collection=None):
+        """Führt run_delete mit gemockter STAC-API aus. Gibt (ok, mocks) zurück."""
+        u = util_stac_delete_ram
+        with patch.object(u, 'get_item', return_value=item) as get_item, \
+             patch.object(u, 'get_collection_items', return_value=collection or []), \
+             patch.object(u, 'get_item_assets',
+                          side_effect=lambda b, c, i, a: ([self.ASSET, 'thumbnail.jpg'])), \
+             patch.object(u, 'delete_asset', return_value=True) as del_asset, \
+             patch.object(u, 'delete_item', return_value=True) as del_item, \
+             patch('builtins.input', side_effect=inputs) as mock_input:
+            ok = u.run_delete(mode, target, 'INT', 'sys-data.int.bgdi.ch', ('u', 'p'))
+        return ok, {'get_item': get_item, 'delete_asset': del_asset,
+                    'delete_item': del_item, 'input': mock_input}
+
+    def test_asset_loeschen_mit_yes_und_i_agree(self):
+        ok, m = self._run('asset', self.ASSET, ['yes', 'I agree'], item=self._item())
+        self.assertTrue(ok)
+        m['delete_asset'].assert_called_once()
+        self.assertEqual(m['delete_asset'].call_args[0][2:4], (self.ITEM_ID, self.ASSET))
+        m['delete_item'].assert_not_called()   # das Item selbst bleibt bestehen
+
+    def test_item_loeschen_entfernt_alle_assets_und_dann_das_item(self):
+        ok, m = self._run('item', '2017-08-25t10092400', ['yes', 'I agree'], item=self._item())
+        self.assertTrue(ok)
+        self.assertEqual(m['delete_asset'].call_count, 2)
+        m['delete_item'].assert_called_once()
+
+    def test_datum_loescht_nur_ram_items_dieses_tages(self):
+        collection = [
+            self._item('ram-2024-07-15t10000000'),
+            self._item('ram-2024-07-15t23595900'),
+            self._item('ram-2024-07-16t10000000'),            # anderer Tag
+            self._item('anderes-item-2024-07-15t10000000'),   # kein RAM-Item
+        ]
+        ok, m = self._run('date', '2024-07-15', ['yes', 'I agree'], collection=collection)
+        self.assertTrue(ok)
+        deleted = [c[0][2] for c in m['delete_item'].call_args_list]
+        self.assertEqual(deleted, ['ram-2024-07-15t10000000', 'ram-2024-07-15t23595900'])
+
+    def test_falsche_erste_bestaetigung_loescht_nichts(self):
+        for first in ('', 'ja', 'y', 'I agree', 'no'):
+            ok, m = self._run('item', self.ITEM_ID, [first, 'I agree'], item=self._item())
+            self.assertFalse(ok, first)
+            m['delete_asset'].assert_not_called()
+            m['delete_item'].assert_not_called()
+
+    def test_falsche_zweite_bestaetigung_loescht_nichts(self):
+        for second in ('', 'yes', 'i agree', 'I AGREE', 'agree'):
+            ok, m = self._run('item', self.ITEM_ID, ['yes', second], item=self._item())
+            self.assertFalse(ok, second)
+            m['delete_asset'].assert_not_called()
+            m['delete_item'].assert_not_called()
+
+    def test_ohne_terminal_eingabe_wird_nichts_geloescht(self):
+        ok, m = self._run('item', self.ITEM_ID, EOFError(), item=self._item())
+        self.assertFalse(ok)
+        m['delete_item'].assert_not_called()
+
+    def test_nicht_vorhandenes_item_fragt_nicht_nach_und_loescht_nichts(self):
+        ok, m = self._run('item', self.ITEM_ID, AssertionError("keine Nachfrage erwartet"), item=None)
+        self.assertFalse(ok)
+        m['delete_item'].assert_not_called()
+
+    def test_nicht_vorhandenes_asset_fragt_nicht_nach_und_loescht_nichts(self):
+        item = self._item(assets=['thumbnail.jpg'])
+        ok, m = self._run('asset', self.ASSET, AssertionError("keine Nachfrage erwartet"), item=item)
+        self.assertFalse(ok)
+        m['delete_asset'].assert_not_called()
+
+    def test_ungueltiges_ziel_wird_abgelehnt(self):
+        ok, m = self._run('date', '15.07.2024', AssertionError("keine Nachfrage erwartet"))
+        self.assertFalse(ok)
+        m['delete_item'].assert_not_called()
+
+    def test_item_wird_nicht_geloescht_wenn_ein_asset_fehlschlaegt(self):
+        u = util_stac_delete_ram
+        with patch.object(u, 'get_item', return_value=self._item()), \
+             patch.object(u, 'get_item_assets', return_value=[self.ASSET, 'thumbnail.jpg']), \
+             patch.object(u, 'delete_asset', side_effect=[True, False]), \
+             patch.object(u, 'delete_item', return_value=True) as del_item, \
+             patch('builtins.input', side_effect=['yes', 'I agree']):
+            ok = u.run_delete('item', self.ITEM_ID, 'INT', 'sys-data.int.bgdi.ch', ('u', 'p'))
+        self.assertFalse(ok)
+        del_item.assert_not_called()
+
+    def _delete_asset_mit_status(self, status_code):
+        """Ruft delete_asset auf, die API antwortet mit dem gegebenen HTTP-Status."""
+        u = util_stac_delete_ram
+        response = MagicMock(status_code=status_code)
+        with patch.object(u, 'PROXY_AVAILABLE', False), \
+             patch.object(u.requests, 'delete', return_value=response):
+            return u.delete_asset('https://x/api/', 'coll', self.ITEM_ID, self.ASSET, ('u', 'p'))
+
+    def test_asset_404_gilt_als_bereits_geloescht(self):
+        # Asset wurde kurz zuvor einzeln gelöscht: Item darf trotzdem gelöscht werden
+        self.assertTrue(self._delete_asset_mit_status(404))
+
+    def test_asset_anderer_fehler_gilt_weiter_als_fehlgeschlagen(self):
+        for status in (401, 403, 500):
+            self.assertFalse(self._delete_asset_mit_status(status), status)
+
+
+# ============================================================
+#  rapidmapping_processor: --delete / --target (CLI) und Startfrage (Dialog)
+# ============================================================
+class TestDeleteOptionInProcessor(unittest.TestCase):
+
+    def setUp(self):
+        self._orig_cwd = os.getcwd()
+        self._tmp_root = tempfile.mkdtemp()
+        os.chdir(self._tmp_root)
+
+    def tearDown(self):
+        logging_root = __import__('logging').getLogger()
+        for h in list(logging_root.handlers):
+            if isinstance(h, __import__('logging').FileHandler):
+                logging_root.removeHandler(h)
+                h.close()
+        os.chdir(self._orig_cwd)
+        shutil.rmtree(self._tmp_root, ignore_errors=True)
+
+    def _main(self, extra_args, **patches):
+        rp = rapidmapping_processor
+        argv = ['rapidmapping_processor.py'] + extra_args
+        with patch.object(sys, 'argv', argv), \
+             patch.object(rp, 'prompt_secrets_dir_if_missing', return_value=True), \
+             patch.object(rp, 'load_stac_credentials', return_value=('u', 'p', 'host.example')), \
+             patch.object(rp, 'initialize_proxy'), \
+             patch.object(rp, 'run_delete', return_value=True) as mock_delete:
+            exit_code = rp.main()
+        return exit_code, mock_delete
+
+    def test_cli_delete_item_ruft_run_delete_mit_int_als_standard(self):
+        code, mock_delete = self._main(['--delete', 'item', '--target', '2017-08-25t10092400'])
+        self.assertEqual(code, 0)
+        mock_delete.assert_called_once_with(
+            'item', 'ram-2017-08-25t10092400', 'INT', 'host.example', ('u', 'p'))
+
+    def test_cli_delete_mit_prod_flag(self):
+        _, mock_delete = self._main(['--delete', 'date', '--target', '2024-07-15', '--prod'])
+        self.assertEqual(mock_delete.call_args[0][2], 'PROD')
+
+    def test_cli_delete_ohne_target_bricht_ab(self):
+        code, mock_delete = self._main(['--delete', 'item'])
+        self.assertEqual(code, 1)
+        mock_delete.assert_not_called()
+
+    def test_cli_delete_mit_ungueltigem_ziel_bricht_ab(self):
+        code, mock_delete = self._main(['--delete', 'date', '--target', '15.07.2024'])
+        self.assertEqual(code, 1)
+        mock_delete.assert_not_called()
+
+    def test_delete_nicht_kombinierbar_mit_produkt(self):
+        code, mock_delete = self._main(
+            ['--delete', 'item', '--target', '2017-08-25t10092400', '--product', 'ebn'])
+        self.assertEqual(code, 1)
+        mock_delete.assert_not_called()
+
+    def test_target_ohne_delete_wird_abgelehnt(self):
+        code, _ = self._main(['--target', '2024-07-15'])
+        self.assertEqual(code, 1)
+
+    def test_dialog_startfrage_enter_bedeutet_verarbeiten(self):
+        with patch('builtins.input', return_value=''):
+            self.assertEqual(rapidmapping_processor.prompt_start_action(), 'process')
+
+    def test_dialog_startfrage_2_ist_loeschen(self):
+        with patch('builtins.input', return_value='2'):
+            self.assertEqual(rapidmapping_processor.prompt_start_action(), 'delete')
+
+    def test_dialog_loeschen_fragt_variante_und_ziel_ab(self):
+        # Startfrage "2" -> Umgebung (Enter = INT) -> Netzwerk (Enter = Autodetect)
+        # -> Variante 2 (Item) -> Ziel
+        inputs = ['2', '', '', '2', '2017-08-25t10092400']
+        rp = rapidmapping_processor
+        with patch.object(sys, 'argv', ['rapidmapping_processor.py']), \
+             patch('builtins.input', side_effect=inputs), \
+             patch.object(rp, 'get_configured_proxy_names', return_value=[]), \
+             patch.object(rp, 'prompt_secrets_dir_if_missing', return_value=True), \
+             patch.object(rp, 'load_stac_credentials', return_value=('u', 'p', 'host.example')), \
+             patch.object(rp, 'initialize_proxy'), \
+             patch.object(rp, 'run_delete', return_value=True) as mock_delete:
+            code = rp.main()
+        self.assertEqual(code, 0)
+        mock_delete.assert_called_once_with(
+            'item', 'ram-2017-08-25t10092400', 'INT', 'host.example', ('u', 'p'))
+
+    def test_dialog_loeschen_abbruch_mit_enter_loescht_nichts(self):
+        inputs = ['2', '', '', '']   # Start=Löschen, INT, Autodetect, Variante: Enter = abbrechen
+        rp = rapidmapping_processor
+        with patch.object(sys, 'argv', ['rapidmapping_processor.py']), \
+             patch('builtins.input', side_effect=inputs), \
+             patch.object(rp, 'get_configured_proxy_names', return_value=[]), \
+             patch.object(rp, 'prompt_secrets_dir_if_missing', return_value=True), \
+             patch.object(rp, 'load_stac_credentials', return_value=('u', 'p', 'host.example')), \
+             patch.object(rp, 'initialize_proxy'), \
+             patch.object(rp, 'run_delete', return_value=True) as mock_delete:
+            code = rp.main()
+        self.assertEqual(code, 0)
+        mock_delete.assert_not_called()
 
 
 if __name__ == "__main__":

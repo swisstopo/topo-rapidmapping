@@ -183,6 +183,109 @@ def validate_timestamp(timestamp: str) -> bool:
         return False
 
 
+# DMC4-Streifen: Zeitpunkt steht im Dateinamen (siehe suggest_dmc4_timestamp)
+#   Format A: MMDD_hhmm_Linie_..._RGBN.tif   z.B. 0312_1234_052_41216_RGBN.tif
+#   Format B: Linie_hhmmss.tif               z.B. 041_091636.tif (ohne Datum)
+_DMC4_NAME_MMDD_HHMM = re.compile(r'^(\d{2})(\d{2})_(\d{2})(\d{2})_')
+_DMC4_NAME_LINE_HHMMSS = re.compile(r'^\d{3}_(\d{2})(\d{2})(\d{2})(?:_.*)?$')
+
+
+def suggest_dmc4_timestamp(tif_files, date: str = None, today=None):
+    """
+    Schlägt den Zeitstempel für DMC4-Streifen aus deren Dateinamen vor.
+
+    Verwendet wird der früheste Streifen (= erster Frame der Serie).
+    Sekunden und Hundertstel sind "00", wenn sie im Dateinamen fehlen.
+    Das Jahr steht nicht im Dateinamen: es kommt aus `date` (falls als
+    YYYY-MM-DD angegeben), sonst aus der Systemzeit. Läge das Datum damit in
+    der Zukunft (z.B. Flug im Dezember, Verarbeitung im Januar), wird das
+    Vorjahr verwendet.
+
+    Ein fehlender Zeitpunkt wird NIE durch das heutige Datum ersetzt: passt
+    kein Dateiname, wird None zurückgegeben.
+
+    Args:
+        tif_files: Liste von Pfaden/Dateinamen der Streifen
+        date (str, optional): 'MM-DD' oder 'YYYY-MM-DD'. Pflicht, wenn die
+            Dateinamen kein Datum enthalten (Format B).
+        today (datetime.date, optional): nur für Tests, sonst heutiges Datum
+
+    Returns:
+        tuple: (timestamp, info). timestamp = 'YYYY-MM-DDthhmmsscc' oder None;
+               info = verständliche Erklärung (Herkunft bzw. Fehlergrund).
+
+    Examples:
+        >>> suggest_dmc4_timestamp(["0312_1234_052_41216_RGBN.tif"], today=date(2026, 5, 1))[0]
+        '2026-03-12t12340000'
+    """
+    from datetime import date as _date
+    from pathlib import Path as _Path
+
+    today = today or _date.today()
+
+    # Optional vorgegebenes Datum zerlegen
+    given_year = given_month = given_day = None
+    if date:
+        m = re.match(r'^(?:(\d{4})-)?(\d{2})-(\d{2})$', date.strip())
+        if not m:
+            return None, (f"Datum '{date}' nicht lesbar. Erlaubt: MM-DD oder YYYY-MM-DD "
+                          f"(z.B. 03-12 oder 2026-03-12).")
+        given_year = int(m.group(1)) if m.group(1) else None
+        given_month, given_day = int(m.group(2)), int(m.group(3))
+
+    # Dateinamen zerlegen: (month|None, day|None, hhmmss, Dateiname)
+    parsed = []
+    for f in tif_files:
+        stem = _Path(f).stem
+        a = _DMC4_NAME_MMDD_HHMM.match(stem)
+        b = _DMC4_NAME_LINE_HHMMSS.match(stem)
+        if a:
+            parsed.append((int(a.group(1)), int(a.group(2)), a.group(3) + a.group(4) + "00", _Path(f).name))
+        elif b:
+            parsed.append((None, None, b.group(1) + b.group(2) + b.group(3), _Path(f).name))
+
+    if not parsed:
+        return None, ("Kein Dateiname im erwarteten Format gefunden "
+                      "(erwartet: MMDD_hhmm_Linie_..._RGBN.tif, z.B. 0312_1234_052_41216_RGBN.tif). "
+                      "Bitte den Zeitstempel vollständig angeben (YYYY-MM-DDthhmmss).")
+
+    if given_month is not None:
+        # Datum vorgegeben: nur Streifen dieses Tages (oder ohne Datum im Namen)
+        candidates = [p for p in parsed
+                      if p[0] is None or (p[0], p[1]) == (given_month, given_day)]
+        if not candidates:
+            return None, (f"Keine Streifen vom {given_month:02d}-{given_day:02d} im Input-Verzeichnis "
+                          f"(Dateinamen zeigen andere Tage). Datum prüfen.")
+        month, day = given_month, given_day
+    else:
+        candidates = [p for p in parsed if p[0] is not None]
+        if not candidates:
+            return None, ("Die Dateinamen enthalten nur die Uhrzeit, kein Datum. "
+                          "Bitte das Datum angeben (YYYY-MM-DD).")
+        month, day = min((p[0], p[1]) for p in candidates)
+        candidates = [p for p in candidates if (p[0], p[1]) == (month, day)]
+
+    first = min(candidates, key=lambda p: p[2])
+    hhmmss = first[2]
+
+    # Jahr: explizit > Systemzeit (bei Zukunftsdatum Vorjahr)
+    try:
+        if given_year is not None:
+            year, year_src = given_year, "angegeben"
+            _date(year, month, day)
+        else:
+            year, year_src = today.year, "aus Systemzeit"
+            if _date(year, month, day) > today:
+                year, year_src = year - 1, "aus Systemzeit, Vorjahr da Datum sonst in der Zukunft"
+                _date(year, month, day)
+    except ValueError:
+        return None, f"Ungültiges Datum {month:02d}-{day:02d} in den Dateinamen. Bitte Zeitstempel angeben."
+
+    timestamp = f"{year:04d}-{month:02d}-{day:02d}t{hhmmss}00"
+    info = f"aus Dateiname '{first[3]}' (frühester Streifen), Jahr {year} {year_src}"
+    return timestamp, info
+
+
 def ensure_hundredths_suffix(timestamp: str) -> str:
     """
     Ensures timestamp has 2-digit hundredths-of-seconds suffix.

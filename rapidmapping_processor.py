@@ -29,6 +29,7 @@ from configuration import (
     get_product_config,
     validate_timestamp,
     normalize_cli_timestamp,
+    suggest_dmc4_timestamp,
     generate_item_name,
     generate_asset_name,
     get_collection_url,
@@ -40,7 +41,15 @@ from configuration import (
 )
 from utilities.file_handler import (
     validate_directory,
-    cleanup_temp_directory
+    cleanup_temp_directory,
+    get_tif_files
+)
+from utilities.util_stac_delete_ram import (
+    DELETE_MODES,
+    normalize_delete_target,
+    prompt_delete_mode_and_target,
+    list_ram_item_ids_for_date,
+    run_delete
 )
 from utilities.mosaic_processor import process_single_cog_file
 from utilities.photo_processor import process_individual_photos, generate_csv_from_stac
@@ -101,6 +110,24 @@ def prompt_proxy_mode() -> tuple:
             logger.info(f"✓ Netzwerk-Modus: {label}")
             return mode, proxy_name
         print(f" Ungültige Eingabe. Bitte 1–{len(choices_map)} eingeben.")
+
+
+def prompt_start_action() -> str:
+    """
+    Erste Frage im Dialog: Verarbeiten (Standard) oder erweiterte Option "Daten löschen".
+    Returns: 'process' oder 'delete'
+    """
+    print("\n Was möchten Sie tun?")
+    print("   1) Daten verarbeiten und publizieren  (Standard)")
+    print("   2) Erweitert: STAC-Daten LÖSCHEN")
+    while True:
+        choice = input("-> ").strip()
+        if choice in ("", "1"):
+            return 'process'
+        if choice == "2":
+            logger.info("✓ Erweiterte Option: Daten löschen")
+            return 'delete'
+        logger.error("✗ Ungültige Auswahl. Bitte 1 oder 2 eingeben (oder Enter für Verarbeiten).")
 
 
 def prompt_environment() -> str:
@@ -253,7 +280,48 @@ def prompt_product_type():
             logger.error("✗ Ungültige Auswahl. Bitte 1-5 eingeben.")
 
 
-def prompt_timestamp(product_type):
+def resolve_dmc4_timestamp(input_dir, raw=None):
+    """
+    Bestimmt den DMC4-Zeitstempel aus den Streifen-Dateinamen.
+
+    raw (optional, bereits normalisiert):
+      - None            -> alles aus Dateinamen + Systemjahr
+      - 'MM-DD' / 'YYYY-MM-DD' -> Datum vorgegeben, Uhrzeit aus Dateinamen
+      - voller Zeitstempel     -> wird unverändert verwendet
+
+    Returns:
+        (timestamp, info): timestamp = 'YYYY-MM-DDthhmmss[cc]' oder None, info = Herkunft bzw. Fehlergrund
+    """
+    if raw and validate_timestamp(raw):
+        return raw, "manuell angegeben"
+    try:
+        tif_files = get_tif_files(Path(input_dir), recursive=False)
+    except ValueError as e:
+        return None, str(e)
+    return suggest_dmc4_timestamp(tif_files, date=raw)
+
+
+def prompt_timestamp(product_type, default=None, default_info=None):
+    """
+    Fragt den Zeitstempel ab. Mit `default` (Vorschlag, z.B. aus DMC4-Dateinamen)
+    übernimmt Enter den Vorschlag; eine Eingabe überschreibt ihn.
+    """
+    if default:
+        print("\n Bitte Aufnahmezeitpunkt bestätigen:")
+        print(f"   Vorschlag {default_info or ''}")
+        print(f"   -> {default}")
+        print("   Enter = Vorschlag übernehmen, oder eigenen Wert eingeben (YYYY-MM-DDthhmmss)")
+        while True:
+            timestamp = input("-> ").strip().lower()
+            if timestamp == '':
+                logger.info(f"✓ Vorschlag übernommen: {default}")
+                return default
+            timestamp = normalize_cli_timestamp(timestamp)
+            if validate_timestamp(timestamp):
+                logger.info(f"✓ Zeitstempel validiert: {timestamp}")
+                return timestamp
+            logger.error("✗ Ungültiges Format. Bitte YYYY-MM-DDthhmmss verwenden (oder Enter für den Vorschlag).")
+
     if product_type in [ProductType.EBN, ProductType.EBO]:
         print("\n Bitte Aufnahmedatum angeben:")
         print("   Format: YYYY-MM-DD  Beispiel: 2024-07-15")
@@ -275,6 +343,156 @@ def prompt_timestamp(product_type):
                 return timestamp
             else:
                 logger.error("✗ Ungültiges Format. Bitte YYYY-MM-DDthhmmss verwenden.")
+
+
+def get_dmc4_timestamp(input_dir, raw_timestamp, interactive):
+    """
+    DMC4: Zeitstempel aus den Streifen-Dateinamen bestimmen (Issue #24).
+
+    CLI (interactive=False): ohne Rückfrage; bei Problemen None + klare Meldung.
+    Dialog (interactive=True): Vorschlag, per Enter übernehmbar oder überschreibbar.
+
+    Returns:
+        str | None: Zeitstempel oder None bei Fehler
+    """
+    raw = normalize_cli_timestamp(raw_timestamp.lower().strip()) if raw_timestamp else None
+    timestamp, info = resolve_dmc4_timestamp(input_dir, raw)
+
+    if interactive:
+        if timestamp is None:
+            logger.warning(f"! Kein automatischer Vorschlag möglich: {info}")
+            return prompt_timestamp(ProductType.QDOP_DMC4)
+        return prompt_timestamp(ProductType.QDOP_DMC4, default=timestamp, default_info=f"({info})")
+
+    if timestamp is None:
+        logger.error(f"✗ Zeitstempel für DMC4 konnte nicht bestimmt werden: {info}")
+        logger.error("  Was tun: --timestamp angeben, z.B. --timestamp 2026-03-12 "
+                     "(Datum, Uhrzeit aus Dateinamen) oder --timestamp 2026-03-12t123400.")
+        return None
+    logger.info(f"✓ Zeitstempel (DMC4, automatisch): {timestamp}  ({info})")
+    return timestamp
+
+
+def show_existing_items_for_date(hostname, auth, timestamp):
+    """
+    Dialog-Hinweis: listet bereits vorhandene RAM-Items desselben Tages, damit ein
+    mögliches Duplikat vor der Verarbeitung auffällt. Nur Anzeige, bricht nie ab.
+    """
+    date = timestamp[:10]
+    try:
+        item_ids = list_ram_item_ids_for_date(hostname, auth, date)
+    except Exception as e:
+        logger.warning(f"! Konnte bestehende Items vom {date} nicht prüfen ({e}). "
+                       f"Verarbeitung ist trotzdem möglich.")
+        return
+    if not item_ids:
+        logger.info(f"✓ Für {date} existiert noch kein Item auf {hostname}")
+        return
+    logger.warning(f"! Für {date} existieren bereits {len(item_ids)} Item(s) auf {hostname}:")
+    for item_id in item_ids:
+        logger.warning(f"    - {item_id}")
+    logger.warning("  Prüfen, ob es sich um ein Duplikat handelt, bevor die Verarbeitung gestartet wird.")
+
+
+def select_proxy_mode(proxy_arg, interactive):
+    """
+    Netzwerk-Modus bestimmen (gemeinsam für Verarbeiten und Löschen):
+      --proxy <Wert>        -> dieser Wert
+      kein --proxy, CLI     -> auto
+      kein --proxy, Dialog  -> Auswahl-Prompt
+    Returns: (mode, proxy_name)
+    """
+    if proxy_arg is not None:
+        arg = proxy_arg.strip()
+        if arg.lower() == 'auto':
+            mode, name = 'auto', None
+        elif arg.lower() in ('direct', 'kein'):
+            mode, name = 'direct', None
+        elif arg.lower() == 'system':
+            mode, name = 'system', None
+        else:
+            mode, name = 'named', arg
+        logger.info(f"✓ Netzwerk-Modus (CLI): {proxy_arg}")
+        return mode, name
+    if not interactive:
+        logger.info("✓ Netzwerk-Modus: Autodetect (Standard)")
+        return 'auto', None
+    return prompt_proxy_mode()
+
+
+def run_delete_option(args):
+    """
+    Erweiterte Option: STAC-Daten löschen (Issue #30) - Dialog oder CLI.
+
+    CLI:    --delete asset|item|date --target <Wert>   (INT, mit --prod: PROD)
+    Dialog: Umgebung, Netzwerk, Variante und Ziel werden abgefragt.
+    Immer mit Anzeige der Daten und zwei Bestätigungen ("yes", "I agree").
+
+    Returns:
+        int: Exit-Code (0 = OK/Abbruch durch Benutzer ohne Fehler, 1 = Fehler)
+    """
+    cli = args.delete is not None
+
+    mode, target = args.delete, None
+    if cli:
+        if not args.target:
+            logger.error("✗ --delete braucht zusätzlich --target. "
+                         "Beispiel: --delete item --target 2017-08-25t10092400")
+            return 1
+        try:
+            target = normalize_delete_target(mode, args.target)
+        except ValueError as e:
+            logger.error(f"✗ {e}")
+            return 1
+
+    environment = "PROD" if args.prod else ("INT" if cli else prompt_environment())
+
+    if args.secrets_dir:
+        if not use_secrets_dir(args.secrets_dir):
+            return 1
+    elif not prompt_secrets_dir_if_missing(interactive=not cli):
+        return 1
+
+    logger.info("=" * 70)
+    logger.info(f"CREDENTIALS ({environment})")
+    logger.info("=" * 70)
+    username, password, hostname = load_stac_credentials(environment=environment)
+    logger.info(f"✓ Credentials geladen: {hostname}")
+
+    logger.info("=" * 70)
+    logger.info("PROXY / NETZWERK")
+    logger.info("=" * 70)
+    proxy_mode, proxy_name = select_proxy_mode(args.proxy, interactive=not cli)
+    initialize_proxy(mode=proxy_mode, proxy_name=proxy_name)
+
+    if not cli:
+        mode, target = prompt_delete_mode_and_target()
+        if mode is None:
+            logger.info("Abbruch: nichts wurde gelöscht.")
+            return 0
+
+    # Log-Datei: logs/<ziel>_delete-<variante>_<zeit>.log
+    logs_dir = Path("logs")
+    logs_dir.mkdir(exist_ok=True)
+    safe_target = re.sub(r'[^a-z0-9._-]', '_', target)
+    log_file = logs_dir / f"{safe_target}_delete-{mode}_{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
+    log_handler = logging.FileHandler(log_file, encoding='utf-8')
+    log_handler.setLevel(logging.INFO)
+    log_handler.setFormatter(
+        logging.Formatter('%(asctime)s %(levelname)-8s %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+    )
+    logging.getLogger().addHandler(log_handler)
+    logger.info(f"Log-Datei: {log_file}")
+    logger.info(f"Löschen: Variante={mode}, Ziel={target}, Umgebung={environment}")
+
+    try:
+        success = run_delete(mode, target, environment, hostname, (username, password))
+    finally:
+        logging.getLogger().removeHandler(log_handler)
+        log_handler.close()
+
+    print(f" Log:  {Path(log_file).resolve()}")
+    return 0 if success else 1
 
 
 def _ensure_ms_suffix(timestamp: str) -> str:
@@ -839,6 +1057,15 @@ def main():
     python rapidmapping_processor.py --proxy system --product ebn --input /data --timestamp 2025-09-03
     python rapidmapping_processor.py --proxy BVCOL  --product ebn --input /data --timestamp 2025-09-03
     python rapidmapping_processor.py --secrets-dir C:\\oed\\temp\\rm\\secrets --product ebn --input /data --timestamp 2025-09-03
+
+    DMC4: Zeitstempel kommt aus den Streifen-Dateinamen (--timestamp optional):
+    python rapidmapping_processor.py --product qdop-dmc4 --input /data/dmc4
+    python rapidmapping_processor.py --product qdop-dmc4 --input /data/dmc4 --timestamp 2026-03-12
+
+    Erweitert: STAC-Daten löschen (immer mit Anzeige + "yes" + "I agree"):
+    python rapidmapping_processor.py --delete asset --target ram-2017-08-25t10092400-ebn-photo.jpg
+    python rapidmapping_processor.py --delete item  --target 2017-08-25t10092400
+    python rapidmapping_processor.py --delete date  --target 2024-07-15 --prod
         """
     )
     # Basic options
@@ -860,7 +1087,16 @@ def main():
                         metavar='TIMESTAMP',
                         help=('Zeitstempel/Datum. '
                               'QDOP/EBN/EBO: YYYY-MM-DDthhmmss[cc]  '
-                              'EBN/EBO Datum: YYYY-MM-DD'))
+                              'EBN/EBO Datum: YYYY-MM-DD  '
+                              'QDOP-DMC4: optional (MM-DD, YYYY-MM-DD oder voll); '
+                              'fehlende Teile aus den Streifen-Dateinamen / Systemjahr'))
+    parser.add_argument('--delete', dest='delete', default=None, choices=list(DELETE_MODES),
+                        help=('Erweitert: STAC-Daten löschen. asset = EIN Asset, '
+                              'item = EIN Item inkl. Assets, date = ALLE Items eines Datums. '
+                              'Braucht --target. Mit Anzeige und Bestätigung ("yes", "I agree").'))
+    parser.add_argument('--target', dest='target', default=None, metavar='ZIEL',
+                        help=('Ziel für --delete: Asset-Name (ram-2017-08-25t10092400-ebn-photo.jpg), '
+                              'Item (2017-08-25t10092400) oder Datum (2024-07-15)'))
     parser.add_argument('--proxy', dest='proxy', default=None,
                         metavar='MODUS',
                         help=('Netzwerk-Modus: '
@@ -881,7 +1117,18 @@ def main():
                               'Default: secrets/ im aktuellen Arbeitsverzeichnis'))
 
     args = parser.parse_args()
-    _is_full_cli = bool(args.product and args.input_dir and args.timestamp)
+    # Vollständig via CLI: --product + --input + --timestamp.
+    # Bei qdop-dmc4 ist --timestamp optional (kommt aus den Streifen-Dateinamen, Issue #24).
+    _is_full_cli = bool(args.product and args.input_dir
+                        and (args.timestamp or args.product == 'qdop-dmc4'))
+
+    # Erweiterte Option "Daten löschen" (Issue #30): CLI-Parameter prüfen
+    if args.delete and (args.product or args.input_dir or args.timestamp):
+        logger.error("✗ --delete kann nicht mit --product, --input oder --timestamp kombiniert werden.")
+        return 1
+    if args.target and not args.delete:
+        logger.error("✗ --target gehört zu --delete (z.B. --delete item --target 2017-08-25t10092400).")
+        return 1
 
     if not (1 <= args.cog_quality <= 100):
         logger.error(f"✗ --cog-quality muss zwischen 1 und 100 liegen (erhalten: {args.cog_quality})")
@@ -893,6 +1140,13 @@ def main():
 
     try:
         print_banner()
+
+        # Erweiterte Option: Daten löschen (CLI: --delete, Dialog: Startfrage)
+        if args.delete:
+            return run_delete_option(args)
+        if args.upload and not (args.product or args.input_dir or args.timestamp):
+            if prompt_start_action() == 'delete':
+                return run_delete_option(args)
 
         # First interactive question: environment (INT/PROD)
         if args.prod:
@@ -919,27 +1173,8 @@ def main():
             logger.info("PROXY / NETZWERK")
             logger.info("=" * 70)
 
-            # Resolve proxy mode:
-            #   --proxy <value>  → use that value directly
-            #   no --proxy, fully CLI (product+input+timestamp all set) → auto
-            #   no --proxy, interactive mode → show prompt
-            if args.proxy is not None:
-                _proxy_arg = args.proxy.strip()
-                if _proxy_arg.lower() == 'auto':
-                    _proxy_mode, _proxy_name = 'auto', None
-                elif _proxy_arg.lower() in ('direct', 'kein'):
-                    _proxy_mode, _proxy_name = 'direct', None
-                elif _proxy_arg.lower() == 'system':
-                    _proxy_mode, _proxy_name = 'system', None
-                else:
-                    _proxy_mode, _proxy_name = 'named', _proxy_arg
-                logger.info(f"✓ Netzwerk-Modus (CLI): {args.proxy}")
-            elif _is_full_cli:
-                _proxy_mode, _proxy_name = 'auto', None
-                logger.info("✓ Netzwerk-Modus: Autodetect (Standard)")
-            else:
-                _proxy_mode, _proxy_name = prompt_proxy_mode()
-
+            # Proxy-Modus: --proxy <Wert> > CLI = auto > Dialog = Auswahl-Prompt
+            _proxy_mode, _proxy_name = select_proxy_mode(args.proxy, interactive=not _is_full_cli)
             initialize_proxy(mode=_proxy_mode, proxy_name=_proxy_name)
         else:
             hostname = None
@@ -967,7 +1202,16 @@ def main():
         else:
             product_type = prompt_product_type()
 
-        if args.timestamp:
+        if product_type == ProductType.QDOP_DMC4:
+            # DMC4: Zeitstempel aus den Streifen-Dateinamen (Issue #24)
+            timestamp_or_date = get_dmc4_timestamp(
+                input_dir, args.timestamp, interactive=not _is_full_cli
+            )
+            if timestamp_or_date is None:
+                return 1
+            if args.upload and not _is_full_cli:
+                show_existing_items_for_date(hostname, (username, password), timestamp_or_date)
+        elif args.timestamp:
             ts = normalize_cli_timestamp(args.timestamp.lower().strip())
             if product_type in (ProductType.EBN, ProductType.EBO):
                 # EBN/EBO: accept date only (YYYY-MM-DD)
@@ -1010,10 +1254,7 @@ def main():
         print("=" * 70)
 
         # Skip confirmation when all parameters supplied via CLI
-        _all_cli = (args.input_dir is not None
-                    and args.product is not None
-                    and args.timestamp is not None)
-        if _all_cli:
+        if _is_full_cli:
             logger.info("▶ CLI-Modus: Starte ohne Bestätigung")
             confirm = 'j'
         else:

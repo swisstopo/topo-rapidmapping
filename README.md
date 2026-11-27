@@ -1,6 +1,6 @@
 # Swisstopo Rapid Mapping Processor 2.0 RC
 
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/swisstopo/topo-rapidmapping)
+[![Ask DeepWiki](https://devin.ai/assets/askdeepwiki.png)](https://deepwiki.com/swisstopo/topo-rapidmapping)
 
 Automatisiertes System für die Publikation von Rapid Mapping Daten auf der FSDI STAC Plattform.
 
@@ -42,7 +42,7 @@ dein-branch  →  int  →  main
    ```bash
    python -m unittest test_functions -v
    ```
-   (aktuell 106 Tests: Konfiguration, DMC4-Zeitstempel aus Dateinamen, STAC-Löschfunktion (Ziele, Bestätigungen), Foto-/Mosaik-/GDAL-Verarbeitung, KML/STAC-Abfragen, Secrets-Prompt, Multipart-Upload-Part-Grösse — siehe `test_functions.py`)
+   (aktuell 108 Tests: Konfiguration, DMC4-Zeitstempel aus Dateinamen, STAC-Löschfunktion (Ziele, Bestätigungen, bereits gelöschte Assets), Foto-/Mosaik-/GDAL-Verarbeitung, KML/STAC-Abfragen, Secrets-Prompt, Multipart-Upload-Part-Grösse — siehe `test_functions.py`)
 4. Sind die Tests grün und stimmt das Ergebnis, Pull Request von `int` → `main` öffnen und mit regulärem **Merge Commit** mergen.
 5. Nach dem Merge Commit `int` → `main`: zusätzlich ein neues Release erstellen (Tag + Release Notes auf GitHub), damit die neue Version für Nutzer:innen sichtbar und die `.exe` unter `dist/` nachvollziehbar einer Version zugeordnet ist — siehe [Version History](#version-history) für die aktuelle Versionsnummer.
 
@@ -55,13 +55,19 @@ Bis `int` nach `main` gemerged wird, enthält er typischerweise mehrere solcher 
 ## Projektstruktur
 
 ```
-rapidmapping_processor/
-├── rapidmapping_processor.py      # Hauptskript (CLI)
+topo-rapidmapping/
+├── rapidmapping_processor.py      # Hauptskript (CLI, Dialog, Orchestrierung)
 ├── 0_GUI_rapidmapping_STACimport.py # GUI-Einstiegspunkt (startet gui.app)
-├── configuration.py                # Produktdefinitionen & Konfiguration
+├── configuration.py                # Produktdefinitionen, STAC-/Endpoint-Konfiguration, DMC4-Zeitstempel
 ├── requirements.txt                # Python-Dependencies
 ├── setup.bat                       # Windows Setup-Script
+├── pyinstaller_onefile.bat         # EXE bauen (eine Datei)
+├── pyinstaller_onedir.bat          # EXE bauen (Verzeichnis)
+├── launch_vscode.bat               # VS Code mit OSGeo4W-/QGIS-Umgebung starten
+├── test_functions.py               # Unit-Tests (python -m unittest test_functions -v)
 ├── README.md                       # Diese Datei
+├── HANDBUCH.md                     # Anleitung für Anwender:innen der EXE
+├── CLAUDE.md                       # Regeln für Claude Code in diesem Repository
 ├── gui/                             # Grafische Oberfläche
 │   ├── app.py                     # Hauptfenster / Formular
 │   ├── runner.py                  # Führt rapidmapping_processor.py als Subprocess aus
@@ -75,11 +81,18 @@ rapidmapping_processor/
 │   ├── mosaic_processor.py        # COG-File Processing
 │   ├── photo_processor.py         # Einzelbild-Verarbeitung
 │   ├── kml_generator.py           # KML-Overview via STAC-Abfrage
-│   └── stac_publisher.py          # STAC-Publikation Wrapper
+│   ├── stac_publisher.py          # STAC-Publikation Wrapper
+│   ├── stac_query.py              # STAC-Abfragen
+│   ├── util_stac_delete_ram.py    # STAC-Daten löschen (Asset / Item / Datum)
+│   ├── create_index.py            # Jahres-Übersichtsindex (KML/GPKG/CSV) aller RAM/KRY-Items
+│   ├── rm_publish_quickorthophoto.sh/.bat # Hilfs-Scripts (siehe Utilities)
+│   └── rm_process_pug_images/     # PUG-Bilder verarbeiten (eigenständig)
+├── dist/                           # Gebaute EXE
 ├── secrets/                        # Credentials (NICHT in Git!)
 │   ├── stac_credentials.json      # STAC API-Keys (INT + PROD)
 │   └── proxy_config.json          # Proxy-Konfiguration
 ├── temp/                           # Temporäre Dateien (wird gelöscht)
+├── logs/                           # Log-Dateien
 ├── util_publish_stac_fsdi.py      # Bestehender STAC-Publisher
 └── main_multipart_upload_via_api.py # Multipart-Upload
 
@@ -107,7 +120,7 @@ sudo apt update
 sudo apt install gdal-bin python3-gdal
 ```
 
-### .EXE (empfohlen)
+### 2. .EXE (empfohlen)
 
 #### Windows (OSGeo4W Shell)
 1. Kopiere Secrets Folder und dist/rapidmapping_processor.exe ind das gleiche Verezeichnis
@@ -116,7 +129,7 @@ sudo apt install gdal-bin python3-gdal
 rapidmapping_processor.exe
 ```
 
-### 3. Python Virtual Environment ( 2. Wahl )
+### 3. Python Virtual Environment (2. Wahl)
 
 #### Mit QGIS Python:
 ```bash
@@ -129,13 +142,13 @@ python3 -m venv .venv
 source .venv/bin/activate
 ```
 
-### 3. Python-Dependencies installieren
+### 4. Python-Dependencies installieren
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 4. Automatisches Setup (Windows)
+### 5. Automatisches Setup (Windows)
 
 ```bash
 setup.bat
@@ -328,7 +341,7 @@ Das Script führt durch folgende Schritte:
 
 ### Erweiterte Option: STAC-Daten löschen
 
-Gelöscht wird in der Collection `ch.swisstopo.spezialbefliegungen`, nur in RAM-Items (`ram-...`). Drei Varianten, jeweils **nach Anzeige** der betroffenen Daten und mit **zwei Bestätigungen** (`yes`, danach `I agree`, alles andere bricht ohne Löschen ab). Läuft auch in der EXE.
+Gelöscht wird in der Collection `ch.swisstopo.spezialbefliegungen`. Variante 1 und 2 erlauben nur RAM-Namen (`ram-...`), Variante 3 trifft nur RAM-Items (`ram-...`, ältere IDs `spezialbefliegungen_ram...`). Drei Varianten, jeweils **nach Anzeige** der betroffenen Daten und mit **zwei Bestätigungen** (`yes`, danach `I agree`, alles andere bricht ohne Löschen ab). Läuft auch in der EXE.
 
 | Variante | `--delete` | `--target` (Beispiel) | Wirkung |
 |----------|-----------|-----------------------|---------|
@@ -349,6 +362,7 @@ python rapidmapping_processor.py --delete date  --target 2024-07-15 --prod
 - `--proxy` und `--secrets-dir` funktionieren wie beim Upload.
 - Die Bestätigungen gibt es immer, auch im CLI-Modus (ein unbeaufsichtigter Lauf wird ohne Terminal abgebrochen, ohne etwas zu löschen).
 - Asset-Namen sind die echten STAC-Asset-Keys (mit Punkt, z.B. `...-ebn-photo.jpg`); die Schreibweise `...-photo-jpg` wird zu `.jpg` korrigiert. Thumbnails gehören zum Item: dafür Variante 2 verwenden.
+- Ist ein Asset schon gelöscht (STAC antwortet mit 404, z.B. weil es kurz zuvor einzeln gelöscht wurde), gibt es nur eine WARNING und das Item wird trotzdem gelöscht.
 - Wird mit Variante 1 das letzte Asset gelöscht, bleibt ein leeres Item bestehen (Hinweis im Log). Es lässt sich mit Variante 2 entfernen.
 - Die Ergebnisse stehen in `logs/<ziel>_delete-<variante>_<zeit>.log`.
 - **Gelöschte Daten können nicht wiederhergestellt werden.**
@@ -1169,8 +1183,9 @@ If the above fails
 
 1. run pyinstaller 
    ```sh
-   pyinstaller --noconfirm --onedir --console --noupx --name rapidmapping_processor --add-data "configuration.py;." --add-data "utilities;utilities" --add-data "util_publish_stac_fsdi.py;." --add-data "main_multipart_upload_via_api.py;." --hidden-import=utilities.credentials --hidden-import=utilities.proxy_handler --hidden-import=utilities.file_handler --hidden-import=utilities.mosaic_processor --hidden-import=utilities.photo_processor --hidden-import=utilities.kml_generator --hidden-import=utilities.stac_publisher --hidden-import=requests_negotiate_sspi --hidden-import=sspi --hidden-import=sspicon --hidden-import=win32timezone --hidden-import=rasterio.serde --hidden-import=rasterio._shim --hidden-import=rasterio.sample --collect-submodules=rasterio rapidmapping_processor.py
+   pyinstaller --noconfirm --onedir --console --noupx --name rapidmapping_processor --add-data "configuration.py;." --add-data "utilities;utilities" --add-data "util_publish_stac_fsdi.py;." --add-data "main_multipart_upload_via_api.py;." --hidden-import=utilities.credentials --hidden-import=utilities.proxy_handler --hidden-import=utilities.file_handler --hidden-import=utilities.mosaic_processor --hidden-import=utilities.photo_processor --hidden-import=utilities.kml_generator --hidden-import=utilities.stac_publisher --hidden-import=utilities.util_stac_delete_ram --hidden-import=spnego --hidden-import=sspilib --collect-submodules=spnego --hidden-import=requests_negotiate_sspi --hidden-import=sspi --hidden-import=sspicon --hidden-import=win32timezone --hidden-import=truststore --hidden-import=rasterio.serde --hidden-import=rasterio._shim --hidden-import=rasterio.sample --collect-submodules=rasterio --collect-data=rasterio --collect-data=pyproj rapidmapping_processor.py
    ```
+   Hinweis: Die `.bat`-Skripte erzeugen zusätzlich einen Runtime-Hook `rth_proj_fix.py` (PROJ-Datenpfad) und binden ihn mit `--runtime-hook=rth_proj_fix.py` ein. Beim manuellen Bauen fehlt er; bei PROJ-/EPSG-Fehlern deshalb besser die `.bat`-Skripte verwenden.
   
 
 2. Create your secrets folder in the same dir
@@ -1222,7 +1237,8 @@ MIT
 
 ### Unreleased (Branch `feature/dmc4-timestamp-and-delete`)
 - **QDOP-DMC4: Zeitstempel aus den Streifen-Dateinamen (Issue #24)**: `--timestamp` ist bei `qdop-dmc4` optional. Uhrzeit (und Monat/Tag) kommen aus dem frühesten Streifen (`MMDD_hhmm_Linie_..._RGBN.tif`), das Jahr aus der Systemzeit (bei Zukunftsdatum Vorjahr). Im Dialog wird der Zeitstempel als Vorschlag angezeigt und es werden bereits vorhandene Items desselben Tages aufgelistet. Neue Funktion `configuration.suggest_dmc4_timestamp()`. Ohne passenden Dateinamen wird nie das heutige Datum eingesetzt
-- **STAC-Daten löschen in der EXE (Issue #30)**: Neue Optionen `--delete asset|item|date` und `--target`, im Dialog als Startfrage "Erweitert: STAC-Daten LÖSCHEN". Immer mit Anzeige und zwei Bestätigungen (`yes`, `I agree`). Die Logik in `utilities/util_stac_delete_ram.py` ist jetzt aus `rapidmapping_processor.py` importierbar (Imports repariert, URLs aus `configuration.py`), Ausgaben gehen ins Logging und damit in die Log-Datei
+- **STAC-Daten löschen in der EXE (Issue #30)**: Neue Optionen `--delete asset|item|date` und `--target`, im Dialog als Startfrage "Erweitert: STAC-Daten LÖSCHEN". Immer mit Anzeige und zwei Bestätigungen (`yes`, `I agree`). Die Logik in `utilities/util_stac_delete_ram.py` ist jetzt aus `rapidmapping_processor.py` importierbar (Imports repariert, URLs aus `configuration.py`), Ausgaben gehen ins Logging und damit in die Log-Datei. Ein Asset, das STAC mit 404 meldet (bereits gelöscht), blockiert das Löschen des Items nicht mehr
+- **README**: DeepWiki-Badge repariert (neue Bild-URL), Projektstruktur und Installations-Nummerierung aktualisiert
 
 ### v2.4 (2025-09)
 - **GUI**: Formularbasierte Oberfläche (`0_GUI_rapidmapping_STACimport.py`) als Alternative zur CLI, baut dieselben CLI-Flags und läuft weiterhin über `rapidmapping_processor.py`/`.exe` als Subprocess

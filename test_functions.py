@@ -1053,6 +1053,22 @@ class TestRunDelete(unittest.TestCase):
         self.assertFalse(ok)
         del_item.assert_not_called()
 
+    def _delete_asset_mit_status(self, status_code):
+        """Ruft delete_asset auf, die API antwortet mit dem gegebenen HTTP-Status."""
+        u = util_stac_delete_ram
+        response = MagicMock(status_code=status_code)
+        with patch.object(u, 'PROXY_AVAILABLE', False), \
+             patch.object(u.requests, 'delete', return_value=response):
+            return u.delete_asset('https://x/api/', 'coll', self.ITEM_ID, self.ASSET, ('u', 'p'))
+
+    def test_asset_404_gilt_als_bereits_geloescht(self):
+        # Asset wurde kurz zuvor einzeln gelöscht: Item darf trotzdem gelöscht werden
+        self.assertTrue(self._delete_asset_mit_status(404))
+
+    def test_asset_anderer_fehler_gilt_weiter_als_fehlgeschlagen(self):
+        for status in (401, 403, 500):
+            self.assertFalse(self._delete_asset_mit_status(status), status)
+
 
 # ============================================================
 #  rapidmapping_processor: --delete / --target (CLI) und Startfrage (Dialog)

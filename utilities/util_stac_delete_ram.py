@@ -232,6 +232,11 @@ def delete_asset(base_url: str, collection_id: str, item_id: str, asset_key: str
         success = response.status_code in [200, 204]
         if success:
             logger.info(f"  ✓ Asset gelöscht: {asset_key}")
+        elif response.status_code == 404:
+            # 404 = Asset existiert nicht (mehr), z.B. kurz zuvor einzeln gelöscht.
+            # Das Ziel "Asset ist weg" ist erreicht, das Item darf weiter gelöscht werden.
+            logger.warning(f"  ! Asset war bereits gelöscht: {asset_key} (HTTP-Status 404)")
+            success = True
         else:
             logger.error(f"  ✗ Asset NICHT gelöscht: {asset_key} (HTTP-Status {response.status_code})")
         return success
